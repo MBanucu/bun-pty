@@ -74,7 +74,7 @@ jobs:
           [[ ${#src[@]} -gt 0 ]] || { echo "❌ no lib"; exit 1; }
           cp "${src[0]}" "out/${{ matrix.out }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: compiled-libs-${{ matrix.target }}
           path: out/*
