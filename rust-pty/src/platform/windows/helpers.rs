@@ -57,7 +57,7 @@ impl NonBlockingWriter for HandleWriter {
             let res = unsafe {
                 WriteFile(
                     self.0,
-                    data[pos..].as_ptr() as *const std::ffi::c_void,
+                    data[pos..].as_ptr() as *const u8,
                     (data.len() - pos) as u32,
                     &mut bytes_written,
                     std::ptr::null_mut(),

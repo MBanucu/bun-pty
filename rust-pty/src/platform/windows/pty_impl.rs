@@ -48,7 +48,8 @@ impl PtyImpl {
         let (tx_r, rx_r) = unbounded::<Msg>();
 
         // Cast to concrete ConPtyMaster (safe because we know the underlying type on Windows)
-        let master_con = unsafe { *Box::from_raw(Box::into_raw(pair.master) as *mut ConPtyMaster) };
+        let master_con: ConPtyMaster =
+            unsafe { *Box::from_raw(Box::into_raw(pair.master) as *mut ConPtyMaster) };
         let master = Arc::new(Mutex::new(master_con));
 
         // Get PTY handle once for efficiency
@@ -71,13 +72,13 @@ impl PtyImpl {
             let mode = PIPE_NOWAIT;
             SetNamedPipeHandleState(
                 read_handle,
-                Some(&mode),
+                &mode,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
             SetNamedPipeHandleState(
                 write_handle,
-                Some(&mode),
+                &mode,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             );
