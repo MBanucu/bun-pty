@@ -21,7 +21,7 @@ const lib = dlopen(libraryPath, {
     returns: FFIType.i32
   },
   bun_pty_read: {
-    args: [FFIType.i32, FFIType.pointer, FFIType.i32],
+    args: [FFIType.i32, FFIType.pointer, FFIType.i32, FFIType.i32],
     returns: FFIType.i32
   },
   bun_pty_write: {
@@ -74,9 +74,9 @@ async function runTest() {
   console.log(`Process ID: ${pid}`);
   
   // Function to read from the PTY
-  function readPty() {
+  function readPty(blocking = 1) {
     const buffer = new Uint8Array(1024);
-    const bytesRead = symbols.bun_pty_read(ptyHandle, buffer, buffer.length);
+    const bytesRead = symbols.bun_pty_read(ptyHandle, buffer, buffer.length, blocking);
     
     if (bytesRead === -2) {
       const exitCode = symbols.bun_pty_get_exit_code(ptyHandle);
