@@ -21,6 +21,7 @@
             cargo
             rustc
             bun
+            bashInteractive
           ];
         };
       }
