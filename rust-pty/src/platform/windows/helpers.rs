@@ -20,7 +20,7 @@ impl NonBlockingReader for HandleReader {
             let res = unsafe {
                 ReadFile(
                     self.0,
-                    temp.as_mut_ptr() as *mut std::ffi::c_void,
+                    temp.as_mut_ptr() as *mut u8,
                     temp.len() as u32,
                     &mut bytes_read,
                     std::ptr::null_mut(),

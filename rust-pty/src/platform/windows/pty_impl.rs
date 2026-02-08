@@ -17,7 +17,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     Security::SECURITY_ATTRIBUTES,
-    Storage::FileSystem::CreatePipe,
+    System::Pipes::CreatePipe,
     System::Pipes::{SetNamedPipeHandleState, PIPE_NOWAIT},
 };
 

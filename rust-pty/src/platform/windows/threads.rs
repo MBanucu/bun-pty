@@ -6,7 +6,7 @@ use super::helpers::HandleReader;
 use super::pty_impl::PtyImpl;
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
-use portable_pty::win::ConPtyMaster;
+use portable_pty::windows::ConPtyMaster;
 use portable_pty::{ChildKiller, MasterPty};
 use std::{
     io::{self, ErrorKind},
