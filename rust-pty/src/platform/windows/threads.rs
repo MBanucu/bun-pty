@@ -187,6 +187,15 @@ fn handle_vt_query(data: &[u8]) -> Option<Vec<u8>> {
         // Respond with cursor position \x1b[1;1R (row 1, col 1)
         Some(b"\x1b[1;1R".to_vec())
     } else {
-        None
+        // Check for other VT sequences that may need responses
+        let focus9001 = b"\x1b[?9001h";
+        let focus1004 = b"\x1b[?1004h";
+        if data.windows(focus9001.len()).any(|w| w == focus9001) {
+            Some(b"\x1b[?9001h".to_vec()) // Acknowledge
+        } else if data.windows(focus1004.len()).any(|w| w == focus1004) {
+            Some(b"\x1b[?1004h".to_vec()) // Acknowledge
+        } else {
+            None
+        }
     }
 }
