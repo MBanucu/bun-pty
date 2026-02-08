@@ -140,14 +140,9 @@ export class Terminal implements IPty {
 	private _rows = DEFAULT_ROWS;
 	private readonly _name = DEFAULT_NAME;
 
-	private _readLoop = false;
 	private _closing = false;
-	private _exited = false;
 	private _pollInterval = 50;
-
-	// TextDecoder with streaming mode to properly handle UTF-8 across chunk boundaries
-	// Without this, multi-byte characters (like box-drawing ─) that span chunks become �
-	private readonly _decoder = new TextDecoder("utf-8");
+	private _worker: Worker | null = null;
 
 	private readonly _onData = new EventEmitter<string>();
 	private readonly _onExit = new EventEmitter<IExitEvent>();
@@ -181,8 +176,18 @@ export class Terminal implements IPty {
 		if (this.handle < 0) throw new Error("PTY spawn failed");
 
 		this._pid = lib.symbols.bun_pty_get_pid(this.handle);
-		// allow constructor to finish and caller to set up event listeners
-		queueMicrotask(() => this._startReadLoop());
+
+		// Spawn worker for polling
+		this._worker = new Worker(new URL('./pty-worker.ts', import.meta.url));
+		this._worker.postMessage({ type: 'init', handle: this.handle, pollInterval: this._pollInterval });
+		this._worker.onmessage = (e) => {
+			const msg = e.data;
+			if (msg.type === 'data') {
+				this._onData.fire(msg.data);
+			} else if (msg.type === 'exit') {
+				this._onExit.fire({ exitCode: msg.exitCode });
+			}
+		};
 	}
 
 	/* ------------- accessors ------------- */
@@ -211,91 +216,28 @@ export class Terminal implements IPty {
 
 	write(data: string) {
 		if (this._closing) return;
-		const buf = Buffer.from(data, "utf8");
-		lib.symbols.bun_pty_write(this.handle, ptr(buf), buf.length);
+		if (this._worker) {
+			this._worker.postMessage({ type: 'write', data });
+		}
 	}
 
 	resize(cols: number, rows: number) {
 		if (this._closing) return;
 		this._cols = cols;
 		this._rows = rows;
-		lib.symbols.bun_pty_resize(this.handle, cols, rows);
+		if (this._worker) {
+			this._worker.postMessage({ type: 'resize', cols, rows });
+		}
 	}
 
 	kill(signal = "SIGTERM") {
 		if (this._closing) return;
 		this._closing = true;
-		lib.symbols.bun_pty_kill(this.handle);
-		lib.symbols.bun_pty_close(this.handle);
+		if (this._worker) {
+			this._worker.postMessage({ type: 'kill' });
+			this._worker.terminate();
+			this._worker = null;
+		}
 		this._onExit.fire({ exitCode: 0, signal });
-	}
-
-	/* ------------- read-loop helpers ------------- */
-
-	private _readOnce(buf: Buffer): number {
-		const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
-		if (n > 0) {
-			const decoded = this._decoder.decode(buf.subarray(0, n), { stream: true });
-			if (decoded) {
-				this._onData.fire(decoded);
-			}
-		}
-		return n;
-	}
-
-	private _checkExit(): boolean {
-		const currentExitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
-		if (currentExitCode !== -1 && !this._exited) {
-			this._exited = true;
-			const remaining = this._decoder.decode();
-			if (remaining) {
-				this._onData.fire(remaining);
-			}
-			this._onExit.fire({ exitCode: currentExitCode });
-			return true;
-		}
-		return false;
-	}
-
-	private async _pollExitCode(): Promise<number> {
-		let exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
-		while (exitCode === -1) {
-			await new Promise(r => setTimeout(r, 1));
-			exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
-		}
-		return exitCode;
-	}
-
-	/* ------------- read-loop ------------- */
-
-	private async _startReadLoop() {
-		if (this._readLoop) return;
-		this._readLoop = true;
-
-		const buf = Buffer.allocUnsafe(4096);
-
-		while (this._readLoop && !this._closing) {
-			const n = this._readOnce(buf);
-			if (this._checkExit()) break;
-
-			if (n === -2) {
-				const exitCode = await this._pollExitCode();
-				const remaining = this._decoder.decode();
-				if (remaining) {
-					this._onData.fire(remaining);
-				}
-				this._onExit.fire({ exitCode });
-				break;
-			} else if (n < 0) {
-				const remaining = this._decoder.decode();
-				if (remaining) {
-					this._onData.fire(remaining);
-				}
-				break;
-			} else {
-				await new Promise((r) => setTimeout(r, this._pollInterval));
-			}
-		}
-		debug('read loop exited');
 	}
 }
