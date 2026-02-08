@@ -142,13 +142,27 @@ impl PtyImpl {
                     if pollfds[1].revents & libc::POLLIN != 0 {
                         debug("read-thread: control pipe has data");
                         
-                        // Read message type
+                        // Read with retry for full buffer
+                        let read_full = |fd: RawFd, buf: &mut [u8]| -> Result<usize, std::io::Error> {
+                            let mut pos = 0;
+                            while pos < buf.len() {
+                                let n = unsafe { libc::read(fd, buf[pos..].as_mut_ptr() as *mut libc::c_void, buf.len() - pos) };
+                                if n < 0 {
+                                    let err = std::io::Error::last_os_error();
+                                    if err.kind() != std::io::ErrorKind::WouldBlock && err.kind() != std::io::ErrorKind::Interrupted {
+                                        return Err(err);
+                                    }
+                                    continue;
+                                } else if n == 0 {
+                                    return Ok(pos); // EOF
+                                }
+                                pos += n as usize;
+                            }
+                            Ok(pos)
+                        };
+
                         let mut msg_type_buf = [0u8; 1];
-                        if unsafe { libc::read(control_read_fd, msg_type_buf.as_mut_ptr() as *mut libc::c_void, 1) } != 1 {
-                            debug("read-thread: failed to read message type");
-                            continue;
-                        }
-                        
+                        if read_full(control_read_fd, &mut msg_type_buf).unwrap_or(0) != 1 { continue; }
                         let msg_type = msg_type_buf[0];
                         debug(&format!("read-thread: received control message type: {}", msg_type));
                         
@@ -156,18 +170,12 @@ impl PtyImpl {
                             1 => { // Write
                                 // Read data length
                                 let mut len_buf = [0u8; 4];
-                                if unsafe { libc::read(control_read_fd, len_buf.as_mut_ptr() as *mut libc::c_void, 4) } != 4 {
-                                    debug("read-thread: failed to read write length");
-                                    continue;
-                                }
+                                if read_full(control_read_fd, &mut len_buf).unwrap_or(0) != 4 { continue; }
                                 let data_len = u32::from_le_bytes(len_buf) as usize;
                                 
                                 // Read data
                                 let mut data_buf = vec![0u8; data_len];
-                                if unsafe { libc::read(control_read_fd, data_buf.as_mut_ptr() as *mut libc::c_void, data_len) } != data_len as isize {
-                                    debug("read-thread: failed to read write data");
-                                    continue;
-                                }
+                                if read_full(control_read_fd, &mut data_buf).unwrap_or(0) != data_len { continue; }
                                 
                                 debug(&format!("read-thread: writing {} bytes", data_len));
                                 // Perform the write operation
@@ -180,12 +188,9 @@ impl PtyImpl {
                                 }
                             }
                             2 => { // Resize
-                                // Read rows and cols
+                                // Read rows and cols (5 bytes total: 1 msg_type + 2 rows + 2 cols)
                                 let mut size_buf = [0u8; 4];
-                                if unsafe { libc::read(control_read_fd, size_buf.as_mut_ptr() as *mut libc::c_void, 4) } != 4 {
-                                    debug("read-thread: failed to read resize data");
-                                    continue;
-                                }
+                                if read_full(control_read_fd, &mut size_buf).unwrap_or(0) != 4 { continue; }
                                 let rows = u16::from_le_bytes([size_buf[0], size_buf[1]]);
                                 let cols = u16::from_le_bytes([size_buf[2], size_buf[3]]);
                                 
@@ -239,18 +244,29 @@ impl PtyTrait for PtyImpl {
         let msg_type = 1u8; // 1 = write
         let len_bytes = (data.len() as u32).to_le_bytes();
         
-        // Write message type
-        if unsafe { libc::write(self.control_pipe[1], &msg_type as *const u8 as *const libc::c_void, 1) } != 1 {
-            return Err("Failed to send write command".into());
-        }
-        // Write data length
-        if unsafe { libc::write(self.control_pipe[1], len_bytes.as_ptr() as *const libc::c_void, 4) } != 4 {
-            return Err("Failed to send write length".into());
-        }
-        // Write data
-        if unsafe { libc::write(self.control_pipe[1], data.as_ptr() as *const libc::c_void, data.len()) } != data.len() as isize {
-            return Err("Failed to send write data".into());
-        }
+        // Write with retry for partial writes
+        let write_full = |fd: RawFd, buf: &[u8]| -> Result<(), std::io::Error> {
+            let mut pos = 0;
+            while pos < buf.len() {
+                let n = unsafe { libc::write(fd, buf[pos..].as_ptr() as *const libc::c_void, buf.len() - pos) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() != std::io::ErrorKind::WouldBlock && err.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(err);
+                    }
+                    // Retry on EAGAIN/EINTR
+                    continue;
+                } else if n == 0 {
+                    return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Pipe closed"));
+                }
+                pos += n as usize;
+            }
+            Ok(())
+        };
+        
+        write_full(self.control_pipe[1], &[msg_type])?;
+        write_full(self.control_pipe[1], &len_bytes)?;
+        write_full(self.control_pipe[1], data)?;
         
         Ok(())
     }
@@ -260,19 +276,33 @@ impl PtyTrait for PtyImpl {
         let msg_type = 2u8; // 2 = resize
         let rows_bytes = size.rows.to_le_bytes();
         let cols_bytes = size.cols.to_le_bytes();
+        let mut size_buf = [0u8; 5];
+        size_buf[0] = msg_type;
+        size_buf[1..3].copy_from_slice(&rows_bytes);
+        size_buf[3..5].copy_from_slice(&cols_bytes);
         
-        // Write message type
-        if unsafe { libc::write(self.control_pipe[1], &msg_type as *const u8 as *const libc::c_void, 1) } != 1 {
-            return Err("Failed to send resize command".into());
-        }
-        // Write rows and cols
-        if unsafe { libc::write(self.control_pipe[1], rows_bytes.as_ptr() as *const libc::c_void, 2) } != 2 {
-            return Err("Failed to send resize rows".into());
-        }
-        if unsafe { libc::write(self.control_pipe[1], cols_bytes.as_ptr() as *const libc::c_void, 2) } != 2 {
-            return Err("Failed to send resize cols".into());
-        }
+        // Write with retry for partial writes
+        let write_full = |fd: RawFd, buf: &[u8]| -> Result<(), std::io::Error> {
+            let mut pos = 0;
+            while pos < buf.len() {
+                let n = unsafe { libc::write(fd, buf[pos..].as_ptr() as *const libc::c_void, buf.len() - pos) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() != std::io::ErrorKind::WouldBlock && err.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(err);
+                    }
+                    // Retry on EAGAIN/EINTR
+                    continue;
+                } else if n == 0 {
+                    return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Pipe closed"));
+                }
+                pos += n as usize;
+            }
+            Ok(())
+        };
         
+        // Use same write_full helper
+        write_full(self.control_pipe[1], &size_buf)?;
         Ok(())
     }
 
@@ -280,10 +310,28 @@ impl PtyTrait for PtyImpl {
         // Send kill command through control pipe
         let msg_type = 3u8; // 3 = kill
         
+        // Write with retry for partial writes
+        let write_full = |fd: RawFd, buf: &[u8]| -> Result<(), std::io::Error> {
+            let mut pos = 0;
+            while pos < buf.len() {
+                let n = unsafe { libc::write(fd, buf[pos..].as_ptr() as *const libc::c_void, buf.len() - pos) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() != std::io::ErrorKind::WouldBlock && err.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(err);
+                    }
+                    // Retry on EAGAIN/EINTR
+                    continue;
+                } else if n == 0 {
+                    return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Pipe closed"));
+                }
+                pos += n as usize;
+            }
+            Ok(())
+        };
+        
         // Write message type
-        if unsafe { libc::write(self.control_pipe[1], &msg_type as *const u8 as *const libc::c_void, 1) } != 1 {
-            return Err("Failed to send kill command".into());
-        }
+        write_full(self.control_pipe[1], &[msg_type])?;
         
         Ok(())
     }

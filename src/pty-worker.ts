@@ -11,7 +11,6 @@ const symbols = loadLibrary() as any;
 interface InitMessage {
 	type: 'init';
 	handle: number;
-	pollInterval: number;  // Kept for backward compatibility but not used
 }
 
 interface WriteMessage {
@@ -76,24 +75,32 @@ onmessage = (e: MessageEvent<Message>) => {
 	switch (msg.type) {
 		case 'init':
 			handle = msg.handle;
-			// pollInterval kept for backward compatibility but not used in event-driven mode
 			startReadLoop();
 			break;
 		case 'write':
 			if (handle >= 0) {
 				const buf = Buffer.from(msg.data, "utf8");
-				symbols.bun_pty_write(handle, ptr(buf), buf.length);
+				const ret = symbols.bun_pty_write(handle, ptr(buf), buf.length);
+				if (ret < 0) {
+					console.error(`Write failed: ${ret}`);
+				}
 			}
 			break;
 		case 'resize':
 			if (handle >= 0) {
-				symbols.bun_pty_resize(handle, msg.cols, msg.rows);
+				const ret = symbols.bun_pty_resize(handle, msg.cols, msg.rows);
+				if (ret < 0) {
+					console.error(`Resize failed: ${ret}`);
+				}
 			}
 			break;
 		case 'kill':
 			running = false;
 			if (handle >= 0) {
-				symbols.bun_pty_kill(handle);
+				const ret = symbols.bun_pty_kill(handle);
+				if (ret < 0) {
+					console.error(`Kill failed: ${ret}`);
+				}
 			}
 			break;
 	}
