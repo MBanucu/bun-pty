@@ -5,7 +5,6 @@ use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 
 // Windows-specific error codes
 const ERROR_NO_DATA: i32 = 232;
-const ERROR_BROKEN_PIPE: i32 = 109;
 const ERROR_IO_PENDING: i32 = 997;
 
 /// Wrapper for Windows handles to implement NonBlockingReader

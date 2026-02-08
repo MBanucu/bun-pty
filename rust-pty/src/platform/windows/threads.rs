@@ -4,15 +4,28 @@ use crate::pty::Msg;
 use crossbeam::channel::Sender;
 use portable_pty::{ChildKiller, MasterPty};
 use std::{
+    ffi::c_void,
     io::{self, ErrorKind, Read},
     sync::{atomic::Ordering, Arc, Mutex},
     thread,
 };
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
-use windows_sys::Win32::Storage::FileSystem::ReadFile;
 
 impl PtyImpl {
+    pub(super) fn spawn_wait_thread(
+        pty: Arc<Self>,
+        mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    ) {
+        thread::spawn(move || {
+            debug("wait-thread: waiting for child...");
+            let status = child.wait();
+            debug("wait-thread: child.wait() returned");
+            if let Ok(exit_status) = status {
+                let code = exit_status.exit_code() as i32;
+                debug(&format!("exit_status.exit_code(): {}", code));
+                pty.exit_code.store(code, Ordering::Release);
+            }
             pty.exited.store(true, Ordering::Release);
             debug("wait-thread: exited and code stored");
         });
@@ -24,7 +37,7 @@ impl PtyImpl {
         killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
         tx: Sender<Msg>,
     ) {
-        let mut rdr = master.lock().unwrap().try_clone_reader().unwrap();
+        let rdr = master.lock().unwrap().try_clone_reader().unwrap();
         let control_read_handle = pty.control_pipe[0];
         let master_clone = master.clone();
 
@@ -33,12 +46,16 @@ impl PtyImpl {
             let mut buf = vec![0; 65536];
             let mut control_buf: Vec<u8> = Vec::with_capacity(8192);
 
-            // Get PTY handle from master
-            let pty_handle = master_clone
-                .lock()
-                .unwrap()
-                .as_raw_handle()
-                .expect("Failed to get PTY handle");
+            // Get PTY handle from reader (unsafe access assuming Reader { handle: HANDLE })
+            let (pty_handle, rdr) = unsafe {
+                let raw = Box::into_raw(rdr);
+                let fat = raw as *const (*mut c_void, *const ());
+                let handle_ptr = (*fat).0 as *const HANDLE;
+                let pty_handle = *handle_ptr;
+                let rdr = Box::from_raw(raw);
+                (pty_handle, rdr)
+            };
+            let mut rdr = rdr;
 
             // Take writer once
             let mut writer = match master_clone.lock().unwrap().take_writer() {
@@ -147,32 +164,6 @@ impl PtyImpl {
             debug("read-thread: ended");
         });
     }
-}
-
-// Helper to get HANDLE from reader - this might need adjustment based on portable_pty implementation
-fn get_handle_from_reader(rdr: &dyn Read) -> Option<HANDLE> {
-    // This is a placeholder - need to check how portable_pty exposes the handle on Windows
-    // For now, assume it's not directly accessible, so we can't use WaitForMultipleObjects on it
-    // Alternative: use ReadFile directly on the handle, but need to get the handle first
-    // Looking at portable_pty source, for Windows it's a Conpty, and reader is a pipe handle
-    // But since we can't access it directly, perhaps we need to modify or find another way
-    // For simplicity, perhaps poll by trying to read non-blocking in a loop, but that's not ideal
-    // Actually, since WaitForMultipleObjects works on handles, and ConPTY reader is a handle, but portable_pty may not expose it
-    // Let's assume for now we can't, and use a timer or something, but that's bad
-    // Upon checking portable_pty, the MasterPty has as_raw_handle() method probably
-    // Yes, let's use that
-    if let Some(master) = rdr as *const dyn Read as *const dyn std::any::Any {
-        // This won't work. Need to cast properly
-        // Actually, portable_pty's reader implements AsRawHandle on Windows
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            if let Some(handle) = rdr.as_raw_handle() as *const _ as *const HANDLE {
-                return Some(*handle);
-            }
-        }
-    }
-    None
 }
 
 // Handle VT protocol queries

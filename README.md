@@ -312,10 +312,10 @@ cargo zigbuild --release --target x86_64-pc-windows-gnu
 # The output will be in rust-pty/target/x86_64-pc-windows-gnu/release/rust_pty.dll
 ```
 
-Alternatively, you can build directly without entering the shell:
+Alternatively, you can check for compilation errors on the Windows target without entering the shell:
 
 ```bash
-nix develop ./windows --command -- sh -c "cd ../rust-pty && cargo zigbuild --release --target x86_64-pc-windows-gnu"
+nix develop ./windows --command -- sh -c "cd ../rust-pty && cargo check --target x86_64-pc-windows-gnu"
 ```
 
 If Zig linking fails, the flake falls back to GCC-based cross-compilation. Ensure all dependencies and features are correctly configured in `rust-pty/Cargo.toml`.
