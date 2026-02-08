@@ -1,10 +1,13 @@
-use super::super::{control::*, io_helpers::PtyIoError};
+use super::super::{
+    control::*,
+    io_helpers::{NonBlockingWriter, PtyIoError},
+};
 use super::helpers::{HandleReader, HandleWriter};
 use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::unbounded;
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use std::{
-    os::windows::io::{AsRawHandle, OwnedHandle},
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     sync::{
         atomic::{AtomicBool, AtomicI32, Ordering},
         Arc, Mutex,
@@ -13,12 +16,12 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{SetNamedPipeHandleState, PIPE_NOWAIT, SECURITY_ATTRIBUTES},
-    System::Pipes::{CreatePipe, PIPE_ACCESS_DUPLEX},
+    System::Pipes::CreatePipe,
 };
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
-    pub(crate) master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    pub(crate) master: Arc<Mutex<Box<dyn MasterPty + Send + AsRawHandle>>>,
     pub(crate) killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     pub(crate) exited: AtomicBool,
     pub(crate) exit_code: AtomicI32,

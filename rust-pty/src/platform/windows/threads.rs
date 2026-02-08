@@ -1,21 +1,30 @@
+use super::super::{
+    control::*,
+    io_helpers::{NonBlockingReader, PtyIoError},
+};
+use super::helpers::HandleReader;
 use super::pty_impl::PtyImpl;
-use super::{helpers::HandleReader};
-use super::super::{control::*, io_helpers::PtyIoError};
 use crate::pty::Msg;
+use crossbeam::channel::Sender;
 use portable_pty::{ChildKiller, MasterPty};
 use std::{
     io::{self, ErrorKind},
-    sync::{Arc, Mutex, atomic::Ordering},
+    os::windows::io::AsRawHandle,
+    sync::{atomic::Ordering, Arc, Mutex},
     thread,
 };
-use crossbeam::channel::Sender;
 use windows_sys::Win32::{
-    Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_FAILED},
+    Foundation::{HANDLE, WAIT_FAILED, WAIT_OBJECT_0},
     System::Threading::{WaitForMultipleObjects, INFINITE},
 };
 
+const CONTROL_EVENT_INDEX: u32 = WAIT_OBJECT_0 + 1;
+
 impl PtyImpl {
-    pub(super) fn spawn_wait_thread(pty: Arc<Self>, mut child: Box<dyn portable_pty::Child + Send + Sync>) {
+    pub(super) fn spawn_wait_thread(
+        pty: Arc<Self>,
+        mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    ) {
         thread::spawn(move || {
             debug("wait-thread: waiting for child...");
             let status = child.wait();
@@ -45,7 +54,7 @@ impl PtyImpl {
             let mut control_buf: Vec<u8> = Vec::with_capacity(8192);
 
             // Get PTY handle
-            let pty_handle = master_clone.lock().unwrap().as_raw_handle() as HANDLE;
+            let pty_handle = (*master_clone.lock().unwrap()).as_raw_handle() as HANDLE;
 
             // Take writer once
             let mut writer = match master_clone.lock().unwrap().take_writer() {
@@ -57,12 +66,22 @@ impl PtyImpl {
                 }
             };
 
-            debug(&format!("read-thread: got PTY handle {:?}, control handle {:?}", pty_handle, control_read_handle));
+            debug(&format!(
+                "read-thread: got PTY handle {:?}, control handle {:?}",
+                pty_handle, control_read_handle
+            ));
 
             loop {
                 debug("read-thread: waiting for events...");
                 let handles = [pty_handle, control_read_handle];
-                let wait_result = unsafe { WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), false.into(), INFINITE) };
+                let wait_result = unsafe {
+                    WaitForMultipleObjects(
+                        handles.len() as u32,
+                        handles.as_ptr(),
+                        false.into(),
+                        INFINITE,
+                    )
+                };
 
                 if wait_result == WAIT_FAILED {
                     debug(&format!("Wait failed: {}", io::Error::last_os_error()));
@@ -92,7 +111,7 @@ impl PtyImpl {
                             }
                         }
                     }
-                    WAIT_OBJECT_0 + 1 => {
+                    CONTROL_EVENT_INDEX => {
                         // Control event
                         debug("read-thread: control pipe has data");
                         let mut temp_buf = vec![0; 8192];
@@ -100,7 +119,13 @@ impl PtyImpl {
                         if reader.read_all_nonblocking(&mut control_buf).is_err() {
                             debug("Control read error");
                         }
-                        if process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
+                        if process_control_messages(
+                            &mut control_buf,
+                            &mut writer,
+                            &master_clone,
+                            &killer,
+                            &tx,
+                        ) {
                             break; // Kill processed
                         }
                     }
