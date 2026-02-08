@@ -99,7 +99,7 @@ describe('PTY Echo Behavior', () => {
     const isWindows = process.platform === "win32";
     const echoCommand = (text: string) =>
         isWindows
-            ? { cmd: "cmd.exe", args: ["/c", `echo ${text}`] }
+            ? { cmd: "powershell.exe", args: ["-Command", `Write-Output '${text}'`] }
             : { cmd: "echo", args: [text] };
     it.skipIf(!process.env.SYNC_TESTS)(
         'should receive initial data once',
