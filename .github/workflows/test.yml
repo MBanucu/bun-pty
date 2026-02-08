@@ -37,6 +37,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          toolchain: 1.92.0
 
       - name: Check Rust version
         run: rustc --version
