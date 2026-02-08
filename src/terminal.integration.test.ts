@@ -496,7 +496,7 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
         stderr: "pipe",
         env: { ...process.env, SYNC_TESTS: "1" },
       });
-      expect(success, `stderr: ${stderr}`).toBe(true);
+      expect(success, `stderr: ${stderr}, stdout: ${stdout}`).toBe(true);
     }
   });
 
