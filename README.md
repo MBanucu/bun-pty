@@ -14,6 +14,8 @@ A cross-platform pseudo-terminal (PTY) implementation for Bun, powered by Rust's
 - **Efficient** - Rust backend with proper error handling and multithreading
 - **Event-Driven Architecture** - Zero idle CPU usage through control pipe mechanism
 - **Optimized for Concurrency** - Worker-thread polling minimizes main-thread CPU usage for multiple PTYs
+- **Unified I/O Abstraction** - Refactored cross-platform I/O helpers for maintainability
+- **Adaptive Performance** - Dynamic buffer sizing and latency optimizations
 - **Zero dependencies** - No external JavaScript dependencies required
 - **Modern** - Built specifically for Bun using its FFI capabilities
 
@@ -185,16 +187,17 @@ interface IPty {
 The Rust backend is organized into platform-specific modules for optimal maintainability:
 
 - **`rust-pty/src/platform/`**: Platform abstraction layer
+  - **`io_helpers.rs`**: Unified I/O helpers with cross-platform error handling and traits
   - **`linux/`**: Modular Linux implementation split into:
-    - `helpers.rs`: I/O utilities and message processing functions
+    - `helpers.rs`: Platform-specific I/O utilities
     - `pty_impl.rs`: Core PtyImpl struct and trait implementations  
     - `threads.rs`: Thread spawning and concurrency logic
     - `mod.rs`: Module exports
   - **`macos.rs`**: macOS-specific PTY implementation
-  - **`windows.rs`**: Windows-specific PTY implementation
+  - **`windows.rs`**: Windows-specific PTY implementation with optimized event handling
   - **`mod.rs`**: Platform dispatch logic
 
-This modular structure enables easier maintenance, testing, and platform-specific optimizations while keeping the public API unchanged.
+This modular structure enables easier maintenance, testing, and platform-specific optimizations while keeping the public API unchanged. The recent refactoring introduced unified I/O abstractions that eliminate code duplication and provide consistent error handling across platforms.
 
 ### Event-Driven PTY Implementation
 
@@ -209,9 +212,9 @@ bun-pty implements an advanced **Option A** architecture that provides true even
 
 #### Platform-Specific Optimizations
 
-- **Linux**: Uses `poll()` for event-driven I/O, with termination signaled exclusively by PTY EOF (eliminating race conditions that could cause data loss in quick-exiting processes)
+- **Linux**: Uses `poll()` for event-driven I/O, with termination signaled exclusively by PTY EOF (eliminating race conditions that could cause data loss in quick-exiting processes). Unified I/O helpers ensure consistent error handling.
 - **macOS**: Blocking reads with EOF detection for simple, reliable termination
-- **Windows**: Event-driven with `WaitForMultipleObjects` on PTY and control handles, non-blocking pipe reads with full data draining to prevent loss in high-throughput scenarios
+- **Windows**: Event-driven with `WaitForMultipleObjects` on PTY and control handles, non-blocking pipe reads with full data draining to prevent loss in high-throughput scenarios. Optimized with PeekNamedPipe for reduced latency and adaptive buffer sizing.
 
 #### Thread Architecture
 
@@ -287,6 +290,8 @@ bun run build
 # Run tests
 bun test
 ```
+
+
 
 ## ❓ Troubleshooting
 
