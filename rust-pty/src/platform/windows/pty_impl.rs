@@ -5,6 +5,7 @@ use crate::debug;
 use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::unbounded;
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
+use std::io::{self, Read, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicI32, Ordering},
     Arc, Mutex,
@@ -14,9 +15,7 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
-    #[allow(dead_code)]
     pub(crate) master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    #[allow(dead_code)]
     pub(crate) killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     pub(crate) exited: AtomicBool,
     pub(crate) exit_code: AtomicI32,
@@ -33,7 +32,6 @@ impl PtyImpl {
         let pair = sys.openpty(size)?;
         let child = pair.slave.spawn_command(cmd.to_builder())?;
         let killer = Arc::new(Mutex::new(child.clone_killer()));
-        let killer_clone = killer.clone();
         let pid = child.process_id().map(|p| p as i32).unwrap_or(-1);
 
         // Channels for reader
@@ -55,21 +53,30 @@ impl PtyImpl {
             return Err("Failed to create control pipe".into());
         }
 
-        // No need for PIPE_NOWAIT; overlapped handles asynchronicity
-
         let pty = Arc::new(Self {
             reader: Reader::new(rx_r),
             master: master.clone(),
-            killer,
+            killer: killer.clone(),
             exited: AtomicBool::new(false),
             exit_code: AtomicI32::new(-1),
             pid,
             control_pipe,
         });
 
+        // Take writer and wrap in shared mutex
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(pty.master.lock().unwrap().take_writer()?));
+
         // Spawn threads
         super::threads::spawn_wait_thread(pty.clone(), child);
-        super::threads::spawn_read_thread(pty.clone(), master.clone(), killer_clone, tx_r.clone());
+        super::threads::spawn_pty_read_thread(pty.clone(), writer.clone(), tx_r.clone());
+        super::threads::spawn_control_thread(
+            pty.clone(),
+            master.clone(),
+            killer.clone(),
+            writer.clone(),
+            tx_r.clone(),
+        );
 
         Ok(pty)
     }
