@@ -76,16 +76,6 @@ impl PtyImpl {
                 }
                 pty_clone.exited.store(true, Ordering::Release);
                 debug("wait-thread: exited and code stored");
-
-                // NEW: Wake read-thread via control pipe "exit" message
-                let msg_type = 4u8;  // New type: 4 = child exited (no payload)
-                let write_fd = pty_clone.control_pipe[1];
-                unsafe {
-                    let n = libc::write(write_fd, &msg_type as *const u8 as *const libc::c_void, 1);
-                    if n < 0 {
-                        debug("Failed to wake read-thread on exit");
-                    }
-                }
             });
         }
 
@@ -177,6 +167,8 @@ impl PtyImpl {
                             let msg_type = control_buf[pos];
                             pos += 1;
 
+                            debug(&format!("read-thread: processing msg_type: {}", msg_type));
+
                             match msg_type {
                                 1 => { // Write
                                     if control_buf.len() - pos < 4 {
@@ -212,25 +204,20 @@ impl PtyImpl {
                                         debug(&format!("read-thread: resize error: {}", e));
                                     }
                                 }
-                                3 => { // Kill
-                                    // No payload
-                                    // Kill (as before)
-                                    if let Ok(mut k) = killer_clone.lock() {
-                                        let _ = k.kill();
-                                    }
-                                    let _ = tx.send(Msg::End);
-                                    // Drain remaining control_buf if needed, but break
-                                    break;
-                                }
-                                4 => {  // NEW: Child exited
-                                    // No payload
-                                    let _ = tx.send(Msg::End);
-                                    break;  // Exit loop
-                                }
-                                _ => {
-                                    debug(&format!("read-thread: unknown message type: {}", msg_type));
-                                    // Skip or error?
-                                }
+                                 3 => { // Kill
+                                     // No payload
+                                     // Kill (as before)
+                                     if let Ok(mut k) = killer_clone.lock() {
+                                         let _ = k.kill();
+                                     }
+                                     let _ = tx.send(Msg::End);
+                                     // Drain remaining control_buf if needed, but break
+                                     break;
+                                 }
+                                 _ => {
+                                     debug(&format!("read-thread: unknown message type: {}", msg_type));
+                                     // Skip or error?
+                                 }
                             }
                         }
 
