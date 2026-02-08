@@ -188,14 +188,18 @@ The Rust backend is organized into platform-specific modules for optimal maintai
 
 - **`rust-pty/src/platform/`**: Platform abstraction layer
   - **`io_helpers.rs`**: Unified I/O helpers with cross-platform error handling and traits
-  - **`linux/`**: Modular Linux implementation split into:
-    - `helpers.rs`: Platform-specific I/O utilities
-    - `pty_impl.rs`: Core PtyImpl struct and trait implementations  
-    - `threads.rs`: Thread spawning and concurrency logic
-    - `mod.rs`: Module exports
-  - **`macos.rs`**: macOS-specific PTY implementation
-  - **`windows.rs`**: Windows-specific PTY implementation with optimized event handling
-  - **`mod.rs`**: Platform dispatch logic
+   - **`linux/`**: Modular Linux implementation split into:
+     - `helpers.rs`: Platform-specific I/O utilities
+     - `pty_impl.rs`: Core PtyImpl struct and trait implementations  
+     - `threads.rs`: Thread spawning and concurrency logic
+     - `mod.rs`: Module exports
+   - **`macos.rs`**: macOS-specific PTY implementation
+   - **`windows/`**: Modular Windows implementation split into:
+     - `helpers.rs`: Platform-specific I/O utilities and error handling
+     - `pty_impl.rs`: Core PtyImpl struct and trait implementations
+     - `threads.rs`: Thread spawning and concurrency logic
+     - `mod.rs`: Module exports
+   - **`mod.rs`**: Platform dispatch logic
 
 This modular structure enables easier maintenance, testing, and platform-specific optimizations while keeping the public API unchanged. The recent refactoring introduced unified I/O abstractions that eliminate code duplication and provide consistent error handling across platforms.
 
