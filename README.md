@@ -180,6 +180,22 @@ interface IPty {
 
 ## 🏗️ Architecture Details
 
+### Code Organization
+
+The Rust backend is organized into platform-specific modules for optimal maintainability:
+
+- **`rust-pty/src/platform/`**: Platform abstraction layer
+  - **`linux/`**: Modular Linux implementation split into:
+    - `helpers.rs`: I/O utilities and message processing functions
+    - `pty_impl.rs`: Core PtyImpl struct and trait implementations  
+    - `threads.rs`: Thread spawning and concurrency logic
+    - `mod.rs`: Module exports
+  - **`macos.rs`**: macOS-specific PTY implementation
+  - **`windows.rs`**: Windows-specific PTY implementation
+  - **`mod.rs`**: Platform dispatch logic
+
+This modular structure enables easier maintenance, testing, and platform-specific optimizations while keeping the public API unchanged.
+
 ### Event-Driven PTY Implementation
 
 bun-pty implements an advanced **Option A** architecture that provides true event-driven PTY operations:
