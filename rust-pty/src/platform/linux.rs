@@ -1,4 +1,4 @@
-use crate::pty::{Command, Msg, PtyTrait, Reader};
+use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::{unbounded, Sender};
 use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
 use std::{
