@@ -1,5 +1,5 @@
 use super::super::io_helpers::NonBlockingReader;
-use super::{super::control::*, helpers::HandleReader, pty_impl::PtyImpl};
+use super::helpers::HandleReader;
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
 use portable_pty::{ChildKiller, MasterPty};
@@ -134,41 +134,26 @@ impl PtyImpl {
                     }
                 }
 
-                // Handle PTY data
-                if signaled_index == 0 {
-                    debug("read-thread: PTY has data");
-                    loop {
-                        match rdr.read(&mut buf) {
-                            Ok(0) => {
-                                debug("read-thread: got Ok(0) - EOF");
-                                let _ = tx.send(Msg::End);
-                                return;
-                            }
-                            Ok(n) => {
-                                debug(&format!("read-thread: got Ok({}) bytes", n));
-                                let data = &buf[..n];
-                                // Check for VT queries and respond
-                                if let Some(response) = handle_vt_query(data) {
-                                    if let Err(e) = writer.write_all(&response) {
-                                        debug(&format!("VT response write error: {}", e));
-                                    } else if let Err(e) = writer.flush() {
-                                        debug(&format!("VT response flush error: {}", e));
-                                    }
-                                }
-                                let _ = tx.send(Msg::Data(data.to_vec()));
-                                if n == buf.len() {
-                                    buf.resize(buf.len() * 2, 0);
-                                }
-                            }
-                            Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-                            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                            Err(e) if cfg!(windows) && e.raw_os_error() == Some(232) => break, // ERROR_NO_DATA on Windows
-                            Err(e) => {
-                                debug(&format!("read-thread: read error: {}", e));
-                                let _ = tx.send(Msg::End);
-                                return;
+                debug("read-thread: PTY has data");
+                let mut temp_buf = Vec::new();
+                match HandleReader(pty_handle).read_all_nonblocking(&mut temp_buf) {
+                    Ok(0) => {} // no data available
+                    Ok(_) => {
+                        let data = &temp_buf;
+                        // Check for VT queries and respond
+                        if let Some(response) = handle_vt_query(data) {
+                            if let Err(e) = writer.write_all(&response) {
+                                debug(&format!("VT response write error: {}", e));
+                            } else if let Err(e) = writer.flush() {
+                                debug(&format!("VT response flush error: {}", e));
                             }
                         }
+                        let _ = tx.send(Msg::Data(data.clone()));
+                    }
+                    Err(e) => {
+                        debug(&format!("PTY read error: {}", e));
+                        let _ = tx.send(Msg::End);
+                        return;
                     }
                 }
             }
