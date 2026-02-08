@@ -64,6 +64,12 @@ export interface IPtyForkOptions {
    * Environment variables to set for the process.
    */
   env?: Record<string, string>;
+
+  /**
+   * Polling interval in milliseconds for reading PTY output.
+   * Defaults to 50ms. Lower values increase CPU usage but reduce latency.
+   */
+  pollInterval?: number;
 }
 
 /**

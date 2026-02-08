@@ -143,6 +143,7 @@ export class Terminal implements IPty {
 	private _readLoop = false;
 	private _closing = false;
 	private _exited = false;
+	private _pollInterval = 50;
 
 	// TextDecoder with streaming mode to properly handle UTF-8 across chunk boundaries
 	// Without this, multi-byte characters (like box-drawing ─) that span chunks become �
@@ -158,6 +159,7 @@ export class Terminal implements IPty {
 	) {
 		this._cols = opts.cols ?? DEFAULT_COLS;
 		this._rows = opts.rows ?? DEFAULT_ROWS;
+		this._pollInterval = opts.pollInterval ?? 50;
 		const cwd = opts.cwd ?? process.cwd();
 		// Properly quote file and arguments to preserve spaces and special characters
 		const cmdline = [shQuote(file), ...args.map(shQuote)].join(" ");
@@ -228,6 +230,42 @@ export class Terminal implements IPty {
 		this._onExit.fire({ exitCode: 0, signal });
 	}
 
+	/* ------------- read-loop helpers ------------- */
+
+	private _readOnce(buf: Buffer): number {
+		const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
+		if (n > 0) {
+			const decoded = this._decoder.decode(buf.subarray(0, n), { stream: true });
+			if (decoded) {
+				this._onData.fire(decoded);
+			}
+		}
+		return n;
+	}
+
+	private _checkExit(): boolean {
+		const currentExitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
+		if (currentExitCode !== -1 && !this._exited) {
+			this._exited = true;
+			const remaining = this._decoder.decode();
+			if (remaining) {
+				this._onData.fire(remaining);
+			}
+			this._onExit.fire({ exitCode: currentExitCode });
+			return true;
+		}
+		return false;
+	}
+
+	private async _pollExitCode(): Promise<number> {
+		let exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
+		while (exitCode === -1) {
+			await new Promise(r => setTimeout(r, 1));
+			exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
+		}
+		return exitCode;
+	}
+
 	/* ------------- read-loop ------------- */
 
 	private async _startReadLoop() {
@@ -237,40 +275,11 @@ export class Terminal implements IPty {
 		const buf = Buffer.allocUnsafe(4096);
 
 		while (this._readLoop && !this._closing) {
-			debug('read loop iteration');
-			const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
-			debug(`bun_pty_read returned n=${n}`);
-			if (n > 0) {
-				// Use streaming mode to buffer incomplete UTF-8 sequences across chunks
-				// This prevents corruption when multi-byte chars span chunk boundaries
-				const decoded = this._decoder.decode(buf.subarray(0, n), { stream: true });
-				if (decoded) {
-					this._onData.fire(decoded);
-				}
-			}
-
-			// Now check for exit (after handling any data)
-			const currentExitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
-			debug(`checked exit code: ${currentExitCode}`);
-			if (currentExitCode !== -1 && !this._exited) {
-				debug(`detected exit via poll: ${currentExitCode}`);
-				this._exited = true;
-				const remaining = this._decoder.decode();
-				if (remaining) {
-					this._onData.fire(remaining);
-				}
-				this._onExit.fire({ exitCode: currentExitCode });
-				break;
-			}
+			const n = this._readOnce(buf);
+			if (this._checkExit()) break;
 
 			if (n === -2) {
-				// CHILD_EXITED - poll exit code until available
-				let exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
-				while (exitCode === -1) {
-					await new Promise(r => setTimeout(r, 1));
-					exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
-				}
-				// Flush any remaining bytes in the decoder
+				const exitCode = await this._pollExitCode();
 				const remaining = this._decoder.decode();
 				if (remaining) {
 					this._onData.fire(remaining);
@@ -278,15 +287,13 @@ export class Terminal implements IPty {
 				this._onExit.fire({ exitCode });
 				break;
 			} else if (n < 0) {
-				// error - flush decoder before breaking
 				const remaining = this._decoder.decode();
 				if (remaining) {
 					this._onData.fire(remaining);
 				}
 				break;
 			} else {
-				// 0 bytes: wait
-				await new Promise((r) => setTimeout(r, 8));
+				await new Promise((r) => setTimeout(r, this._pollInterval));
 			}
 		}
 		debug('read loop exited');
