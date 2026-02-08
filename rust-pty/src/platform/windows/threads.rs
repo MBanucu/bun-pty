@@ -6,10 +6,12 @@ use portable_pty::{ChildKiller, MasterPty};
 use std::{
     ffi::c_void,
     io::{self, ErrorKind, Read},
+    mem::transmute,
     sync::{atomic::Ordering, Arc, Mutex},
     thread,
 };
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Pipes::{SetNamedPipeHandleState, PIPE_NOWAIT, PIPE_READMODE_BYTE};
 use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
 
 impl PtyImpl {
@@ -49,13 +51,24 @@ impl PtyImpl {
             // Get PTY handle from reader (unsafe access assuming Reader { handle: HANDLE })
             let (pty_handle, rdr) = unsafe {
                 let raw = Box::into_raw(rdr);
-                let fat = raw as *const (*mut c_void, *const ());
-                let handle_ptr = (*fat).0 as *const HANDLE;
+                let parts: (*mut c_void, *const ()) = transmute(raw);
+                let handle_ptr = parts.0 as *const HANDLE;
                 let pty_handle = *handle_ptr;
                 let rdr = Box::from_raw(raw);
                 (pty_handle, rdr)
             };
             let mut rdr = rdr;
+
+            // Set PTY reader pipe to non-blocking mode
+            unsafe {
+                let mut mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+                SetNamedPipeHandleState(
+                    pty_handle,
+                    &mut mode,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+            }
 
             // Take writer once
             let mut writer = match master_clone.lock().unwrap().take_writer() {

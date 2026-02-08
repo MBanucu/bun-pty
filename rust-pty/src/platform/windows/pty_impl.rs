@@ -9,7 +9,9 @@ use std::sync::{
     Arc, Mutex,
 };
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Pipes::{
+    CreatePipe, SetNamedPipeHandleState, PIPE_NOWAIT, PIPE_READMODE_BYTE,
+};
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
@@ -52,6 +54,17 @@ impl PtyImpl {
         } == 0
         {
             return Err("Failed to create control pipe".into());
+        }
+
+        // Set control pipe read handle to non-blocking mode
+        unsafe {
+            let mut mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+            SetNamedPipeHandleState(
+                control_pipe[0],
+                &mut mode,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
         }
 
         let pty = Arc::new(Self {
