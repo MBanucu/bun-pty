@@ -15,6 +15,7 @@ use windows_sys::Win32::{
         Pipes::PIPE_NOWAIT,
     },
     Security::SECURITY_ATTRIBUTES,
+    Storage::FileSystem::{SetNamedPipeHandleState, ReadFile, WriteFile},
 };
 
 fn debug(msg: &str) {
@@ -60,7 +61,7 @@ impl PtyImpl {
         };
 
         unsafe {
-            if CreatePipe(&mut read_handle, &mut write_handle, Some(&sa), 0).is_err() {
+            if CreatePipe(&mut read_handle, &mut write_handle, Some(&sa), 0) == 0 {
                 return Err("Failed to create control pipe".into());
             }
             // Set non-blocking
@@ -136,9 +137,9 @@ impl PtyImpl {
 
             loop {
                 let handles: [HANDLE; 2] = [pty_handle as HANDLE, control_handle as HANDLE];
-                let res = unsafe { WaitForMultipleObjects(&handles, false, INFINITE) };
+                let res = unsafe { WaitForMultipleObjects(handles.as_ptr(), handles.len() as u32, INFINITE, 0) };
 
-                if res == u32::MAX { // WAIT_FAILED
+                if res == 0xFFFFFFFF { // WAIT_FAILED
                     debug("WaitForMultipleObjects failed");
                     break;
                 }
@@ -178,18 +179,16 @@ impl PtyImpl {
     }
 
     fn read_all_nonblocking_handle(handle: *mut std::ffi::c_void, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        // Implement reading from HANDLE
-        // Using ReadFile
         use windows_sys::Win32::Storage::FileSystem::ReadFile;
         use std::io::Error;
         let mut temp = [0u8; 8192];
         let mut total = 0;
         loop {
-            let mut bytes_read = 0;
-            let res = unsafe { ReadFile(handle as _, temp.as_mut_ptr(), temp.len() as u32, &mut bytes_read, std::ptr::null_mut()) };
+            let mut bytes_read = 0u32;
+            let res = unsafe { ReadFile(handle as HANDLE, temp.as_mut_ptr() as *mut std::ffi::c_void, temp.len() as u32, &mut bytes_read, std::ptr::null_mut()) };
             if res == 0 {
                 let err = Error::last_os_error();
-                if err.raw_os_error() == Some(997) { // ERROR_IO_PENDING or similar, but for now assume WouldBlock
+                if err.raw_os_error() == Some(997) { // ERROR_IO_PENDING
                     break;
                 }
                 return Err(err);
@@ -320,8 +319,8 @@ impl PtyImpl {
         use std::io::Error;
         let mut pos = 0;
         while pos < data.len() {
-            let mut bytes_written = 0;
-            let res = unsafe { WriteFile(handle as _, data[pos..].as_ptr(), (data.len() - pos) as u32, &mut bytes_written, std::ptr::null_mut()) };
+            let mut bytes_written = 0u32;
+            let res = unsafe { WriteFile(handle as HANDLE, data[pos..].as_ptr() as *const std::ffi::c_void, (data.len() - pos) as u32, &mut bytes_written, std::ptr::null_mut()) };
             if res == 0 {
                 let err = Error::last_os_error();
                 if err.raw_os_error() == Some(997) { // ERROR_IO_PENDING
