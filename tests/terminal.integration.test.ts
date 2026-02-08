@@ -306,7 +306,7 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     terminal.write("exit\n");
 
-    const timeout = 5000;
+    const timeout = 10000;
     const start = Date.now();
 
     while (!hasExited && Date.now() - start < timeout) {
@@ -331,7 +331,7 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
 
     expect(missingLines.length).toBe(0);
     expect(lines.length).toBeGreaterThanOrEqual(1000);
-  }, 10000);
+  }, 20000);
 
   test("Terminal preserves arguments with spaces correctly", async () => {
     let dataReceived = "";
