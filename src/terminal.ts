@@ -117,7 +117,7 @@ try {
 			returns: FFIType.i32,
 		},
 		bun_pty_read: {
-			args: [FFIType.i32, FFIType.pointer, FFIType.i32],
+			args: [FFIType.i32, FFIType.pointer, FFIType.i32, FFIType.i32],
 			returns: FFIType.i32,
 		},
 		bun_pty_resize: {
@@ -179,7 +179,6 @@ export class Terminal implements IPty {
 
 		// Spawn worker for polling
 		this._worker = new Worker(new URL('./pty-worker.ts', import.meta.url));
-		this._worker.postMessage({ type: 'init', handle: this.handle, pollInterval: this._pollInterval });
 		this._worker.onmessage = (e) => {
 			const msg = e.data;
 			if (msg.type === 'data') {
@@ -188,6 +187,7 @@ export class Terminal implements IPty {
 				this._onExit.fire({ exitCode: msg.exitCode });
 			}
 		};
+		this._worker.postMessage({ type: 'init', handle: this.handle, pollInterval: 1 });
 	}
 
 	/* ------------- accessors ------------- */

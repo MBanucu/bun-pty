@@ -119,28 +119,41 @@ impl Reader {
         Self { rx, done: AtomicBool::new(false) }
     }
 
-    fn read(&self) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
+    fn read(&self, blocking: bool) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
         if self.done.load(Ordering::Relaxed) {
             return Ok(Msg::End);
         }
-        let msgs: Vec<_> = self.rx.try_iter().collect();
-        let has_end = msgs.iter().any(|m| matches!(m, Msg::End));
-        if has_end {
-            self.done.store(true, Ordering::Relaxed);
-        }
-        let data_msgs: Vec<_> = msgs.into_iter().filter(|m| matches!(m, Msg::Data(_))).collect();
-        if data_msgs.is_empty() {
-            if has_end {
-                Ok(Msg::End)
-            } else {
-                Ok(Msg::Data(Vec::new()))
+        if blocking {
+            // Blocking: wait for next message
+            match self.rx.recv() {
+                Ok(Msg::End) => {
+                    self.done.store(true, Ordering::Relaxed);
+                    Ok(Msg::End)
+                }
+                Ok(msg) => Ok(msg),
+                Err(_) => Ok(Msg::End), // channel closed
             }
         } else {
-            let mut out = Vec::new();
-            for m in data_msgs {
-                if let Msg::Data(d) = m { out.extend(d); }
+            // Non-blocking: collect all available
+            let msgs: Vec<_> = self.rx.try_iter().collect();
+            let has_end = msgs.iter().any(|m| matches!(m, Msg::End));
+            if has_end {
+                self.done.store(true, Ordering::Relaxed);
             }
-            Ok(Msg::Data(out))
+            let data_msgs: Vec<_> = msgs.into_iter().filter(|m| matches!(m, Msg::Data(_))).collect();
+            if data_msgs.is_empty() {
+                if has_end {
+                    Ok(Msg::End)
+                } else {
+                    Ok(Msg::Data(Vec::new()))
+                }
+            } else {
+                let mut out = Vec::new();
+                for m in data_msgs {
+                    if let Msg::Data(d) = m { out.extend(d); }
+                }
+                Ok(Msg::Data(out))
+            }
         }
     }
 }
@@ -249,8 +262,8 @@ impl Pty {
         Ok(pty)
     }
 
-    fn read(&self) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
-        let m = self.reader.read()?;
+    fn read(&self, blocking: bool) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
+        let m = self.reader.read(blocking)?;
         debug(&format!("Pty::read returned: {:?}", m));
         if matches!(m, Msg::End) { self.exited.store(true, Ordering::Relaxed); }
         Ok(m)
@@ -333,6 +346,7 @@ pub unsafe extern "C" fn bun_pty_read(
     handle: c_int,
     buf:    *mut u8,
     len:    c_int,
+    blocking: c_int,
 ) -> c_int {
     if handle <= 0 || buf.is_null() || len <= 0 { return ERROR; }
     with(handle as u32, |pty| {
@@ -351,7 +365,7 @@ pub unsafe extern "C" fn bun_pty_read(
         drop(pend); // release lock before potentially blocking ops
 
         // 2) pull fresh data
-        match pty.read() {
+        match pty.read(blocking != 0) {
             Ok(Msg::Data(d)) if !d.is_empty() => {
                 let n = d.len().min(max);
                 unsafe { std::ptr::copy_nonoverlapping(d.as_ptr(), buf, n); }

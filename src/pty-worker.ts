@@ -57,7 +57,7 @@ let lib: any;
 try {
 	lib = dlopen(libPath, {
 		bun_pty_write: { args: [FFIType.i32, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
-		bun_pty_read: { args: [FFIType.i32, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
+		bun_pty_read: { args: [FFIType.i32, FFIType.pointer, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
 		bun_pty_resize: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
 		bun_pty_kill: { args: [FFIType.i32], returns: FFIType.i32 },
 		bun_pty_get_pid: { args: [FFIType.i32], returns: FFIType.i32 },
@@ -92,7 +92,7 @@ interface KillMessage {
 type Message = InitMessage | WriteMessage | ResizeMessage | KillMessage;
 
 let handle = -1;
-let pollInterval = 50;
+let pollInterval = 1;
 let running = false;
 const decoder = new TextDecoder("utf-8");
 
@@ -103,7 +103,7 @@ async function startReadLoop() {
 	const buf = Buffer.allocUnsafe(4096);
 
 	while (running) {
-		const n = lib.symbols.bun_pty_read(handle, ptr(buf), buf.length);
+		const n = lib.symbols.bun_pty_read(handle, ptr(buf), buf.length, 0); // non-blocking
 		if (n > 0) {
 			const decoded = decoder.decode(buf.subarray(0, n), { stream: true });
 			if (decoded) {
