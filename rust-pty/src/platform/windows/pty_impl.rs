@@ -17,7 +17,6 @@ use super::super::io_helpers::NonBlockingReader;
 use super::helpers::HandleReader;
 use crate::debug;
 use crate::platform::control::process_control_messages;
-use crate::pty::Msg;
 use crossbeam::channel::Sender;
 use std::{ffi::c_void, io, mem::transmute, thread};
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
