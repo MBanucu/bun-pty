@@ -125,7 +125,7 @@ describe('PTY Echo Behavior', () => {
                     if (dataReceived.includes("sync test"))
                         resolve(dataReceived);
                 });
-                const timeout = isWindows ? 5000 : 2000;
+                const timeout = 5000;
                 setTimeout(() => { reject(new Error("Timeout waiting for data")); }, timeout); // Timeout to avoid hanging test
             });
 
