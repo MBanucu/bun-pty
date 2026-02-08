@@ -45,7 +45,7 @@ export class Terminal implements IPty {
 	private readonly _name = DEFAULT_NAME;
 
 	private _closing = false;
-	private _pollInterval = 50;
+	private _pollInterval = 1;
 	private _worker: Worker | null = null;
 
 	private readonly _onData = new EventEmitter<string>();
@@ -58,7 +58,7 @@ export class Terminal implements IPty {
 	) {
 		this._cols = opts.cols ?? DEFAULT_COLS;
 		this._rows = opts.rows ?? DEFAULT_ROWS;
-		this._pollInterval = opts.pollInterval ?? 50;
+		this._pollInterval = opts.pollInterval ?? 1;
 		const cwd = opts.cwd ?? process.cwd();
 		// Properly quote file and arguments to preserve spaces and special characters
 		const cmdline = [shQuote(file), ...args.map(shQuote)].join(" ");
@@ -91,7 +91,7 @@ export class Terminal implements IPty {
 				this._onExit.fire({ exitCode: msg.exitCode });
 			}
 		};
-		this._worker.postMessage({ type: 'init', handle: this.handle, pollInterval: 1 });
+ 		this._worker.postMessage({ type: 'init', handle: this.handle, pollInterval: this._pollInterval });
 	}
 
 	/* ------------- accessors ------------- */

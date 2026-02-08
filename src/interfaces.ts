@@ -67,7 +67,8 @@ export interface IPtyForkOptions {
 
   /**
    * Polling interval in milliseconds for reading PTY output.
-   * Defaults to 50ms. Lower values increase CPU usage but reduce latency.
+   * Lower values reduce latency but increase CPU usage.
+   * Defaults to 1ms (adaptive polling starts here).
    */
   pollInterval?: number;
 }

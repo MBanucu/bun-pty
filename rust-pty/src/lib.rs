@@ -16,6 +16,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::Duration,
 };
 
 /* ---------- constants ---------- */
@@ -124,14 +125,15 @@ impl Reader {
             return Ok(Msg::End);
         }
         if blocking {
-            // Blocking: wait for next message
-            match self.rx.recv() {
+            // Blocking: wait for next message with timeout for responsiveness
+            match self.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Msg::End) => {
                     self.done.store(true, Ordering::Relaxed);
                     Ok(Msg::End)
                 }
                 Ok(msg) => Ok(msg),
-                Err(_) => Ok(Msg::End), // channel closed
+                Err(crossbeam::channel::RecvTimeoutError::Timeout) => Ok(Msg::Data(Vec::new())),
+                Err(crossbeam::channel::RecvTimeoutError::Disconnected) => Ok(Msg::End), // channel closed
             }
         } else {
             // Non-blocking: collect all available
