@@ -210,7 +210,8 @@ bun-pty implements an advanced **Option A** architecture that provides true even
 #### Platform-Specific Optimizations
 
 - **Linux**: Uses `poll()` for event-driven I/O, with termination signaled exclusively by PTY EOF (eliminating race conditions that could cause data loss in quick-exiting processes)
-- **macOS/Windows**: Blocking reads with EOF detection for simple, reliable termination
+- **macOS**: Blocking reads with EOF detection for simple, reliable termination
+- **Windows**: Event-driven with `WaitForMultipleObjects` on PTY and control handles, non-blocking pipe reads with full data draining to prevent loss in high-throughput scenarios
 
 #### Thread Architecture
 
