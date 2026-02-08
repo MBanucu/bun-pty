@@ -74,7 +74,7 @@ jobs:
         run: bun run test:integration
         env:
           RUN_INTEGRATION_TESTS: true
-          BUN_PTY_DEBUG: true
+          BUN_PTY_DEBUG: 1
 
       - name: Upload coverage to artifacts
         if: always()
