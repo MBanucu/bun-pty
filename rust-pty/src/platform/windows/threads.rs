@@ -6,6 +6,7 @@ use super::helpers::HandleReader;
 use super::pty_impl::PtyImpl;
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
+use portable_pty::windows::ConPtyMaster;
 use portable_pty::{ChildKiller, MasterPty};
 use std::{
     io::{self, ErrorKind},
@@ -41,7 +42,7 @@ impl PtyImpl {
 
     pub(super) fn spawn_read_thread(
         pty: Arc<Self>,
-        master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+        master: Arc<Mutex<ConPtyMaster>>,
         killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
         tx: Sender<Msg>,
     ) {
@@ -53,8 +54,8 @@ impl PtyImpl {
             let mut buf = vec![0; 65536];
             let mut control_buf: Vec<u8> = Vec::with_capacity(8192);
 
-            // Get PTY handle
-            let pty_handle = (*master_clone.lock().unwrap()).as_raw_handle() as HANDLE;
+            // Use pre-extracted pty_handle (no lock needed)
+            let pty_handle = pty.pty_handle;
 
             // Take writer once
             let mut writer = match master_clone.lock().unwrap().take_writer() {

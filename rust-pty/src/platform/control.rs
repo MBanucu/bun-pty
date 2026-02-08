@@ -1,8 +1,8 @@
-use std::io::Write;
-use portable_pty::{PtySize, MasterPty, ChildKiller};
-use std::sync::{Arc, Mutex};
-use crossbeam::channel::Sender;
 use crate::pty::Msg;
+use crossbeam::channel::Sender;
+use portable_pty::{ChildKiller, MasterPty, PtySize};
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
 pub(crate) const MSG_WRITE: u8 = 1;
 pub(crate) const MSG_RESIZE: u8 = 2;
@@ -39,7 +39,12 @@ pub(crate) fn process_control_messages(
                     pos -= 1; // Rewind type
                     break;
                 }
-                let data_len = u32::from_le_bytes([control_buf[pos], control_buf[pos+1], control_buf[pos+2], control_buf[pos+3]]) as usize;
+                let data_len = u32::from_le_bytes([
+                    control_buf[pos],
+                    control_buf[pos + 1],
+                    control_buf[pos + 2],
+                    control_buf[pos + 3],
+                ]) as usize;
                 pos += 4;
 
                 if control_buf.len() - pos < data_len {
@@ -59,10 +64,15 @@ pub(crate) fn process_control_messages(
                     pos -= 1; // Rewind type
                     break;
                 }
-                let rows = u16::from_le_bytes([control_buf[pos], control_buf[pos+1]]);
-                let cols = u16::from_le_bytes([control_buf[pos+2], control_buf[pos+3]]);
+                let rows = u16::from_le_bytes([control_buf[pos], control_buf[pos + 1]]);
+                let cols = u16::from_le_bytes([control_buf[pos + 2], control_buf[pos + 3]]);
                 pos += 4;
-                if let Err(e) = master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
+                if let Err(e) = master.lock().unwrap().resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                }) {
                     debug(&format!("Resize error: {}", e));
                 }
             }

@@ -1,17 +1,20 @@
-use super::{helpers::{FdReader}, pty_impl::PtyImpl, super::control::*};
 use super::super::io_helpers::NonBlockingReader;
+use super::{super::control::*, helpers::FdReader, pty_impl::PtyImpl};
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
+use libc::{pollfd, POLLERR, POLLHUP, POLLIN, POLLNVAL};
 use portable_pty::{ChildKiller, MasterPty};
 use std::{
     io::{self, ErrorKind, Read},
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{atomic::Ordering, Arc, Mutex},
     thread,
 };
-use libc::{pollfd, POLLIN, POLLHUP, POLLERR, POLLNVAL};
 
 impl PtyImpl {
-    pub(super) fn spawn_wait_thread(pty: Arc<Self>, mut child: Box<dyn portable_pty::Child + Send + Sync>) {
+    pub(super) fn spawn_wait_thread(
+        pty: Arc<Self>,
+        mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    ) {
         thread::spawn(move || {
             debug("wait-thread: waiting for child...");
             let status = child.wait();
@@ -42,7 +45,11 @@ impl PtyImpl {
             let mut control_buf: Vec<u8> = Vec::with_capacity(8192);
 
             // Get PTY FD and set non-blocking
-            let pty_fd = master_clone.lock().unwrap().as_raw_fd().expect("Failed to get PTY FD");
+            let pty_fd = master_clone
+                .lock()
+                .unwrap()
+                .as_raw_fd()
+                .expect("Failed to get PTY FD");
             unsafe {
                 let flags = libc::fcntl(pty_fd, libc::F_GETFL);
                 libc::fcntl(pty_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
@@ -58,17 +65,29 @@ impl PtyImpl {
                 }
             };
 
-            debug(&format!("read-thread: got PTY fd {}, control fd {}", pty_fd, control_read_fd));
+            debug(&format!(
+                "read-thread: got PTY fd {}, control fd {}",
+                pty_fd, control_read_fd
+            ));
 
             // Poll structures
             let mut pollfds = [
-                pollfd { fd: pty_fd, events: POLLIN | POLLHUP | POLLERR, revents: 0 },
-                pollfd { fd: control_read_fd, events: POLLIN, revents: 0 },
+                pollfd {
+                    fd: pty_fd,
+                    events: POLLIN | POLLHUP | POLLERR,
+                    revents: 0,
+                },
+                pollfd {
+                    fd: control_read_fd,
+                    events: POLLIN,
+                    revents: 0,
+                },
             ];
 
             loop {
                 debug("read-thread: polling...");
-                let ret = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
+                let ret =
+                    unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
                 debug(&format!("read-thread: poll returned {}", ret));
 
                 if ret < 0 {
@@ -80,10 +99,19 @@ impl PtyImpl {
                 if pollfds[1].revents & POLLIN != 0 {
                     debug("read-thread: control pipe has data");
                     let mut control_reader = FdReader(control_read_fd);
-                    if control_reader.read_all_nonblocking(&mut control_buf).is_err() {
+                    if control_reader
+                        .read_all_nonblocking(&mut control_buf)
+                        .is_err()
+                    {
                         debug(&format!("Control read error"));
                     }
-                    if process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
+                    if process_control_messages(
+                        &mut control_buf,
+                        &mut writer,
+                        &master_clone,
+                        &killer,
+                        &tx,
+                    ) {
                         break; // Kill processed
                     }
                 }

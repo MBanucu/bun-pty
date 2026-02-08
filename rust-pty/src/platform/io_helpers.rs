@@ -1,5 +1,5 @@
-use std::io;
 use std::fmt;
+use std::io;
 
 /// Unified error enum for PTY I/O operations across platforms
 #[derive(Debug)]

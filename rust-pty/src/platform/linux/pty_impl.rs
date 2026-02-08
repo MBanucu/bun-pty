@@ -1,14 +1,17 @@
-use super::helpers::{FdWriter};
 use super::super::control::*;
 use super::super::io_helpers::NonBlockingWriter;
+use super::helpers::FdWriter;
 use crate::pty::{Msg, PtyTrait, Reader};
-use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
+use crossbeam::channel::unbounded;
+use libc;
+use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use std::{
     os::unix::io::RawFd,
-    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
+    sync::{
+        atomic::{AtomicBool, AtomicI32, Ordering},
+        Arc, Mutex,
+    },
 };
-use libc;
-use crossbeam::channel::unbounded;
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
@@ -23,7 +26,10 @@ pub struct PtyImpl {
 }
 
 impl PtyImpl {
-    pub fn new(cmd: &crate::pty::Command, size: PtySize) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        cmd: &crate::pty::Command,
+        size: PtySize,
+    ) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let sys = native_pty_system();
         let pair = sys.openpty(size)?;
         let child = pair.slave.spawn_command(cmd.to_builder())?;
@@ -94,7 +100,9 @@ impl PtyTrait for PtyImpl {
 
     fn kill(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut writer = FdWriter(self.control_pipe[1]);
-        writer.write_all_nonblocking(&[MSG_KILL]).map_err(Into::into)
+        writer
+            .write_all_nonblocking(&[MSG_KILL])
+            .map_err(Into::into)
     }
 
     fn get_pid(&self) -> i32 {

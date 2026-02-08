@@ -35,7 +35,12 @@ impl Command {
 
         let env = parse_env_string(env_ptr);
 
-        Self { cmd, args, env, cwd: cwd.to_owned() }
+        Self {
+            cmd,
+            args,
+            env,
+            cwd: cwd.to_owned(),
+        }
     }
 
     pub fn to_builder(&self) -> portable_pty::CommandBuilder {
@@ -97,7 +102,10 @@ pub struct Reader {
 
 impl Reader {
     pub fn new(rx: Receiver<Msg>) -> Self {
-        Self { rx, done: std::sync::atomic::AtomicBool::new(false) }
+        Self {
+            rx,
+            done: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 
     pub fn read(&self, blocking: bool) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
@@ -123,7 +131,10 @@ impl Reader {
             if has_end {
                 self.done.store(true, Ordering::Relaxed);
             }
-            let data_msgs: Vec<_> = msgs.into_iter().filter(|m| matches!(m, Msg::Data(_))).collect();
+            let data_msgs: Vec<_> = msgs
+                .into_iter()
+                .filter(|m| matches!(m, Msg::Data(_)))
+                .collect();
             if data_msgs.is_empty() {
                 if has_end {
                     Ok(Msg::End)
@@ -133,7 +144,9 @@ impl Reader {
             } else {
                 let mut out = Vec::new();
                 for m in data_msgs {
-                    if let Msg::Data(d) = m { out.extend(d); }
+                    if let Msg::Data(d) = m {
+                        out.extend(d);
+                    }
                 }
                 Ok(Msg::Data(out))
             }
@@ -155,11 +168,14 @@ pub trait PtyTrait: Send + Sync {
 // Pty struct (now holds an Arc<dyn PtyTrait> for the platform-specific impl)
 pub struct Pty {
     inner: Arc<dyn PtyTrait>,
-    pub pending: Mutex<Vec<u8>>,  // Keep for handling partial reads
+    pub pending: Mutex<Vec<u8>>, // Keep for handling partial reads
 }
 
 impl Pty {
-    pub fn new(cmd: Command, size: PtySize) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        cmd: Command,
+        size: PtySize,
+    ) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let inner = crate::platform::create_pty_impl(&cmd, size)?;
         Ok(Arc::new(Self {
             inner,
@@ -176,7 +192,9 @@ impl Pty {
         const SUCCESS: c_int = 0;
         const ERROR: c_int = -1;
         const CHILD_EXITED: c_int = -2;
-        if self.is_exited() { return CHILD_EXITED; }
+        if self.is_exited() {
+            return CHILD_EXITED;
+        }
         let slice = unsafe { std::slice::from_raw_parts(data, len) };
         self.inner.write(slice).map(|_| SUCCESS).unwrap_or(ERROR)
     }

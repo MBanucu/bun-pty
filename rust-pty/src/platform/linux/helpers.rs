@@ -1,6 +1,6 @@
 use super::super::io_helpers::{NonBlockingReader, NonBlockingWriter, PtyIoError};
-use std::io::{self, ErrorKind};
 use libc;
+use std::io::{self, ErrorKind};
 use std::os::unix::io::RawFd;
 
 /// Wrapper for Unix file descriptors to implement NonBlockingReader
@@ -11,7 +11,8 @@ impl NonBlockingReader for FdReader {
         let mut temp = [0u8; 8192];
         let mut total = 0;
         loop {
-            let n = unsafe { libc::read(self.0, temp.as_mut_ptr() as *mut libc::c_void, temp.len()) };
+            let n =
+                unsafe { libc::read(self.0, temp.as_mut_ptr() as *mut libc::c_void, temp.len()) };
             if n < 0 {
                 let err = io::Error::last_os_error();
                 match err.kind() {
@@ -36,7 +37,13 @@ impl NonBlockingWriter for FdWriter {
     fn write_all_nonblocking(&mut self, data: &[u8]) -> Result<(), PtyIoError> {
         let mut pos = 0;
         while pos < data.len() {
-            let n = unsafe { libc::write(self.0, data[pos..].as_ptr() as *const libc::c_void, data.len() - pos) };
+            let n = unsafe {
+                libc::write(
+                    self.0,
+                    data[pos..].as_ptr() as *const libc::c_void,
+                    data.len() - pos,
+                )
+            };
             if n < 0 {
                 let err = io::Error::last_os_error();
                 match err.kind() {

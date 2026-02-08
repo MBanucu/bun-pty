@@ -1,10 +1,11 @@
 use super::super::{
     control::*,
-    io_helpers::{NonBlockingWriter, PtyIoError},
+    io_helpers::{NonBlockingReader, NonBlockingWriter, PtyIoError},
 };
 use super::helpers::{HandleReader, HandleWriter};
 use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::unbounded;
+use portable_pty::windows::ConPtyMaster;
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use std::{
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
@@ -21,13 +22,14 @@ use windows_sys::Win32::{
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
-    pub(crate) master: Arc<Mutex<Box<dyn MasterPty + Send + AsRawHandle>>>,
+    pub(crate) master: Arc<Mutex<ConPtyMaster>>,
     pub(crate) killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     pub(crate) exited: AtomicBool,
     pub(crate) exit_code: AtomicI32,
     pub(crate) pid: i32,
     pub(crate) control_pipe_read: OwnedHandle,
     pub(crate) control_pipe_write: OwnedHandle,
+    pub(crate) pty_handle: HANDLE,
 }
 
 impl PtyImpl {
@@ -44,7 +46,12 @@ impl PtyImpl {
 
         let (tx_r, rx_r) = unbounded::<Msg>();
 
-        let master = Arc::new(Mutex::new(pair.master));
+        // Cast to concrete ConPtyMaster (safe because we know the underlying type on Windows)
+        let master_con = unsafe { *Box::from_raw(Box::into_raw(pair.master) as *mut ConPtyMaster) };
+        let master = Arc::new(Mutex::new(master_con));
+
+        // Get PTY handle once for efficiency
+        let pty_handle = master.lock().unwrap().as_raw_handle() as HANDLE;
 
         // Create control pipe
         let mut read_handle: HANDLE = INVALID_HANDLE_VALUE;
@@ -87,6 +94,7 @@ impl PtyImpl {
             pid,
             control_pipe_read,
             control_pipe_write,
+            pty_handle,
         });
 
         // Spawn threads

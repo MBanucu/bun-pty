@@ -1,9 +1,12 @@
 // Common blocking implementation for macOS (blocking read-thread with separate write-thread)
 use crate::pty::{Msg, Reader};
 use crossbeam::channel::{unbounded, Sender};
-use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
+use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use std::{
-    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
+    sync::{
+        atomic::{AtomicBool, AtomicI32, Ordering},
+        Arc, Mutex,
+    },
     thread,
 };
 
@@ -27,7 +30,10 @@ pub struct PtyImpl {
 
 #[allow(dead_code)]
 impl PtyImpl {
-    pub fn new(cmd: &crate::pty::Command, size: PtySize) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        cmd: &crate::pty::Command,
+        size: PtySize,
+    ) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let sys = native_pty_system();
         let pair = sys.openpty(size)?;
         let mut child = pair.slave.spawn_command(cmd.to_builder())?;
@@ -102,7 +108,9 @@ impl PtyImpl {
             let mut wtr = master.lock().unwrap().take_writer()?;
             thread::spawn(move || {
                 while let Ok((data, len)) = rx_w.recv() {
-                    if wtr.write_all(&data[..len]).is_err() { break; }
+                    if wtr.write_all(&data[..len]).is_err() {
+                        break;
+                    }
                     let _ = wtr.flush();
                 }
             });
@@ -113,16 +121,25 @@ impl PtyImpl {
 }
 
 impl crate::pty::PtyTrait for PtyImpl {
-    fn read(&self, blocking: bool) -> Result<crate::pty::Msg, Box<dyn std::error::Error + Send + Sync>> {
+    fn read(
+        &self,
+        blocking: bool,
+    ) -> Result<crate::pty::Msg, Box<dyn std::error::Error + Send + Sync>> {
         self.reader.read(blocking)
     }
 
     fn write(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.tx_w.send((data.to_vec(), data.len())).map_err(|e| e.into())
+        self.tx_w
+            .send((data.to_vec(), data.len()))
+            .map_err(|e| e.into())
     }
 
     fn resize(&self, size: PtySize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.master.lock().unwrap().resize(size).map_err(|e| e.into())
+        self.master
+            .lock()
+            .unwrap()
+            .resize(size)
+            .map_err(|e| e.into())
     }
 
     fn kill(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
