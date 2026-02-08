@@ -4,6 +4,7 @@ mod linux;
 mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
+mod common;
 
 #[cfg(target_os = "linux")]
 pub use linux::*;
