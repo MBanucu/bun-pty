@@ -144,4 +144,9 @@ export interface IPty {
    * Defaults to "SIGTERM".
    */
   kill(signal?: string): void;
+
+  /**
+   * Dispose of the PTY resources.
+   */
+  dispose(): void;
 } 

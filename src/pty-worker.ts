@@ -131,7 +131,6 @@ onmessage = (e: MessageEvent<Message>) => {
 			running = false;
 			if (handle >= 0) {
 				symbols.bun_pty_kill(handle);
-				symbols.bun_pty_close(handle);
 			}
 			break;
 	}

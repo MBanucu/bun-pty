@@ -89,6 +89,7 @@ export class Terminal implements IPty {
 				this._onData.fire(msg.data);
 			} else if (msg.type === 'exit') {
 				this._onExit.fire({ exitCode: msg.exitCode });
+				this.dispose();
 			}
 		};
  		this._worker.postMessage({ type: 'init', handle: this.handle, pollInterval: this._pollInterval });
@@ -143,5 +144,13 @@ export class Terminal implements IPty {
 			this._worker = null;
 		}
 		this._onExit.fire({ exitCode: 0, signal });
+		this.dispose();
+	}
+
+	dispose() {
+		if (this.handle >= 0) {
+			symbols.bun_pty_close(this.handle);
+			this.handle = -1;
+		}
 	}
 }
