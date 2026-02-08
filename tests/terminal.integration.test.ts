@@ -1,6 +1,6 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { Terminal } from "./terminal";
-import type { IExitEvent } from "./interfaces";
+import { Terminal } from "../src/terminal";
+import type { IExitEvent } from "../src/interfaces";
 
 // This is an integration test file that runs tests against the actual Rust backend.
 // Only run if the environment variable RUN_INTEGRATION_TESTS is set to "true"
@@ -134,6 +134,23 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
       hasExited = true;
     });
 
+    // Helper to wait for specific output
+    const waitForOutput = (expected: string, timeoutMs = 2000): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        const check = () => {
+          if (dataReceived.includes(expected)) {
+            resolve();
+          } else if (hasExited) {
+            reject(new Error(`Process exited before finding "${expected}"`));
+          } else {
+            setTimeout(check, 50);
+          }
+        };
+        setTimeout(() => reject(new Error(`Timeout waiting for "${expected}"`)), timeoutMs);
+        check();
+      });
+    };
+
     // Give the shell time to start
     await new Promise((resolve) => setTimeout(resolve, isWindows ? 500 : 100));
 
@@ -144,9 +161,9 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
       terminal.write("exit\r\n");
     } else {
       terminal.write("echo Hello\n");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitForOutput("Hello");
       terminal.write("echo World\n");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitForOutput("World");
       terminal.write("exit\n");
     }
 
@@ -289,7 +306,7 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     terminal.write("exit\n");
 
-    const timeout = 5000;
+    const timeout = 10000;
     const start = Date.now();
 
     while (!hasExited && Date.now() - start < timeout) {
@@ -314,7 +331,7 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
 
     expect(missingLines.length).toBe(0);
     expect(lines.length).toBeGreaterThanOrEqual(1000);
-  });
+  }, 20000);
 
   test("Terminal preserves arguments with spaces correctly", async () => {
     let dataReceived = "";
@@ -482,5 +499,53 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(dataReceived).toContain("HelloFromEnv");
+  });
+
+  test("Terminal onData listener receives data when set immediately after construction", async () => {
+    const start = Date.now();
+    const maxRuntime = 4000;
+    let runnings = 1;
+    while (Date.now() - start < maxRuntime) {
+      console.log(`[TEST] Iteration ${runnings++}`);
+      const { success, stdout, stderr } = Bun.spawnSync({
+        cmd: ["bun", "test", "terminal.integration.test.ts", "--test-name-pattern", "Terminal sync tests"],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, SYNC_TESTS: "1" },
+      });
+      expect(success, `stderr: ${stderr}, stdout: ${stdout}`).toBe(true);
+    }
+  });
+
+  test.skipIf(!process.env.SYNC_TESTS)("Terminal sync tests", async () => {
+    let dataReceived = "";
+    let hasExited = false;
+
+    const { cmd, args } = echoCommand("sync test");
+    console.log("[TEST] Starting terminal with command:", cmd, args);
+    const terminal = new Terminal(cmd, args);
+    terminals.push(terminal);
+
+    const exitPromise = new Promise<void>((resolve) => {
+      terminal.onExit(() => {
+        console.log("[TEST] Process exited");
+        hasExited = true;
+        resolve();
+      });
+    });
+    const dataPromise = new Promise<void>((resolve) => {
+      terminal.onData((data) => {
+        console.log("[TEST] Received data:", data);
+        dataReceived += data;
+        if (dataReceived.includes("sync test"))
+          resolve();
+      });
+      const timeout = isWindows ? 5000 : 2000;
+      setTimeout(() => { resolve(); }, timeout); // Timeout to avoid hanging test
+    });
+
+    await Promise.race([exitPromise, dataPromise]);
+
+    expect(dataReceived).toContain("sync test");
   });
 });

@@ -12,6 +12,10 @@ A cross-platform pseudo-terminal (PTY) implementation for Bun, powered by Rust's
 - **Simple API** - Clean Promise-based API similar to node-pty
 - **Type-safe** - Complete TypeScript definitions included
 - **Efficient** - Rust backend with proper error handling and multithreading
+- **Event-Driven Architecture** - Zero idle CPU usage through control pipe mechanism
+- **Optimized for Concurrency** - Worker-thread polling minimizes main-thread CPU usage for multiple PTYs
+- **Unified I/O Abstraction** - Refactored cross-platform I/O helpers for maintainability
+- **Adaptive Performance** - Dynamic buffer sizing and latency optimizations
 - **Zero dependencies** - No external JavaScript dependencies required
 - **Modern** - Built specifically for Bun using its FFI capabilities
 
@@ -151,6 +155,7 @@ Creates and spawns a new pseudoterminal.
   - `rows`: Number of rows (default: 24)
   - `cwd`: Working directory (default: process.cwd())
   - `env`: Environment variables
+  - `pollInterval`: **Deprecated** - Polling interval was used in older versions; the event-driven architecture now uses zero idle CPU. This option is accepted for backward compatibility but has no effect.
 
 Returns an `IPty` instance.
 
@@ -175,20 +180,85 @@ interface IPty {
 }
 ```
 
-### Event Types
+## 🏗️ Architecture Details
 
-```typescript
-interface IExitEvent {
-  exitCode: number;
-  signal?: number | string;
-}
+### Code Organization
 
-interface IDisposable {
-  dispose(): void;
-}
+The Rust backend is organized into platform-specific modules for optimal maintainability:
+
+- **`rust-pty/src/platform/`**: Platform abstraction layer
+  - **`io_helpers.rs`**: Unified I/O helpers with cross-platform error handling and traits
+   - **`linux/`**: Modular Linux implementation split into:
+     - `helpers.rs`: Platform-specific I/O utilities
+     - `pty_impl.rs`: Core PtyImpl struct and trait implementations  
+     - `threads.rs`: Thread spawning and concurrency logic
+     - `mod.rs`: Module exports
+   - **`macos.rs`**: macOS-specific PTY implementation
+   - **`windows/`**: Modular Windows implementation split into:
+     - `helpers.rs`: Platform-specific I/O utilities and error handling
+     - `pty_impl.rs`: Core PtyImpl struct and trait implementations
+     - `threads.rs`: Thread spawning and concurrency logic
+     - `mod.rs`: Module exports
+   - **`mod.rs`**: Platform dispatch logic
+
+This modular structure enables easier maintenance, testing, and platform-specific optimizations while keeping the public API unchanged. The recent refactoring introduced unified I/O abstractions that eliminate code duplication and provide consistent error handling across platforms.
+
+### Event-Driven PTY Implementation
+
+bun-pty implements an advanced **Option A** architecture that provides true event-driven PTY operations:
+
+#### Core Components
+
+- **Control Pipe**: Unix pipe (Linux/macOS) or event handle (Windows) for instant thread signaling
+- **Event Types**: Enhanced message passing with `Data`, `Write`, `Resize`, `Kill`, and `Exit` messages
+- **Blocking FFI**: `bun_pty_wait()` function that blocks until data or control events arrive
+- **Poll-Based Read Thread**: Uses OS-level `poll()`/`select()` on both PTY file descriptor and control pipe
+
+#### Platform-Specific Optimizations
+
+- **Linux**: Uses `poll()` for event-driven I/O, with termination signaled exclusively by PTY EOF (eliminating race conditions that could cause data loss in quick-exiting processes). Unified I/O helpers ensure consistent error handling.
+- **macOS**: Blocking reads with EOF detection for simple, reliable termination
+- **Windows**: Event-driven with `WaitForMultipleObjects` on PTY and control handles, non-blocking pipe reads with full data draining to prevent loss in high-throughput scenarios. Optimized with PeekNamedPipe for reduced latency and adaptive buffer sizing.
+
+#### Thread Architecture
+
+```
+Main Thread ──▶ Worker Thread ──▶ Rust FFI ──▶ Read Thread
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      poll(pty_fd, control_fd)
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      Data/Control Event
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      Return to Worker
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      Fire JavaScript Events
+     │                │                │             │
+     ▼                ▼                ▼             ▼
+User Code ◀───── Event Callbacks ◀─────── bun_pty_wait() ◀─── Msg
 ```
 
-## 🧪 Testing
+#### Why Option A?
+
+Traditional PTY implementations use polling loops that consume CPU even when idle. Option A eliminates this by:
+
+1. **Blocking on Events**: Read thread blocks until actual PTY data arrives
+2. **Instant Control Response**: Control operations (write/resize/kill) wake the thread immediately
+3. **OS-Level Efficiency**: Uses `poll()`/`select()` for true event-driven behavior
+4. **Zero Idle CPU**: No busy-waiting or timer-based polling when PTY is inactive
+
+This makes bun-pty ideal for applications that maintain many PTYs simultaneously, such as:
+- Terminal multiplexers
+- IDE integrated terminals
+- SSH connection pools
+- Long-running background processes
+
+### Backward Compatibility
+
+The event-driven architecture is fully backward compatible. Existing code using `pollInterval` will continue to work unchanged, though the option is now ignored since polling is no longer used.
 
 bun-pty uses [Bun's built-in test runner](https://bun.com/docs/test) for fast, Jest-compatible testing.
 
@@ -224,6 +294,22 @@ bun run build
 # Run tests
 bun test
 ```
+### Nix Development Environment
+
+For a reproducible development environment with cross-compilation support,
+you can check for compilation errors on the Windows target without entering the shell:
+
+```bash
+nix develop ./windows --command -- sh -c "cd rust-pty && cargo check --target x86_64-pc-windows-gnu"
+```
+
+Or build the Windows binary directly:
+
+```bash
+nix develop ./windows --command -- sh -c "cd rust-pty && cargo build --release --target x86_64-pc-windows-gnu"
+```
+
+If Zig linking fails, the flake falls back to GCC-based cross-compilation. Ensure all dependencies and features are correctly configured in `rust-pty/Cargo.toml`.
 
 ## ❓ Troubleshooting
 

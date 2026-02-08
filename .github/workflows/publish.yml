@@ -38,7 +38,7 @@ jobs:
             out:    rust_pty.dll
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,7 +74,7 @@ jobs:
           [[ ${#src[@]} -gt 0 ]] || { echo "❌ no lib"; exit 1; }
           cp "${src[0]}" "out/${{ matrix.out }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: compiled-libs-${{ matrix.target }}
           path: out/*
@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

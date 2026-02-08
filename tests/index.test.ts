@@ -1,9 +1,9 @@
 import { expect, test, describe } from "bun:test";
-import type { IPty, IPtyForkOptions } from "./interfaces";
+import type { IPty, IPtyForkOptions } from "../src/interfaces";
 // Static import to ensure index.ts is included in coverage
 // Note: This will load terminal.ts which requires FFI library
 // The library should exist in rust-pty/target/release/ for coverage to work
-import { spawn } from "./index";
+import { spawn } from "../src/index";
 
 describe("spawn function interface", () => {
 	describe("function signature", () => {

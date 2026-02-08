@@ -64,6 +64,13 @@ export interface IPtyForkOptions {
    * Environment variables to set for the process.
    */
   env?: Record<string, string>;
+
+  /**
+   * Polling interval in milliseconds for reading PTY output.
+   * Lower values reduce latency but increase CPU usage.
+   * Defaults to 1ms (adaptive polling starts here).
+   */
+  pollInterval?: number;
 }
 
 /**
@@ -137,4 +144,9 @@ export interface IPty {
    * Defaults to "SIGTERM".
    */
   kill(signal?: string): void;
+
+  /**
+   * Dispose of the PTY resources.
+   */
+  dispose(): void;
 } 
