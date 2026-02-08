@@ -4,8 +4,7 @@ use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
 use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
     thread,
-    os::unix::io::{RawFd, AsRawFd},
-    fs::File,
+    os::unix::io::RawFd,
     io::Read,
 };
 use libc;
@@ -91,14 +90,8 @@ impl PtyImpl {
                 debug("read-thread started");
                 let mut buf = vec![0; 8192];
 
-                // Get PTY file descriptor by unsafe casting a temporary reader
-                let pty_fd = {
-                    let temp_rdr = master_clone.lock().unwrap().try_clone_reader().unwrap();
-                    unsafe {
-                        let file_ptr = (&*temp_rdr) as *const dyn Read as *const File;
-                        (*file_ptr).as_raw_fd()
-                    }
-                };
+                // Get PTY file descriptor from the master
+                let pty_fd = master_clone.lock().unwrap().as_raw_fd().expect("Failed to get PTY FD");
 
                 debug(&format!("read-thread: got PTY fd {}, control fd {}", pty_fd, control_read_fd));
 
