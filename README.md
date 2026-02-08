@@ -300,13 +300,13 @@ For a reproducible development environment with cross-compilation support,
 you can check for compilation errors on the Windows target without entering the shell:
 
 ```bash
-nix develop ./windows --command -- sh -c "cd ../rust-pty && cargo check --target x86_64-pc-windows-gnu"
+nix develop ./windows --command -- sh -c "cd rust-pty && cargo check --target x86_64-pc-windows-gnu"
 ```
 
 Or build the Windows binary directly:
 
 ```bash
-nix develop ./windows --command -- sh -c "cd ../rust-pty && cargo build --release --target x86_64-pc-windows-gnu"
+nix develop ./windows --command -- sh -c "cd rust-pty && cargo build --release --target x86_64-pc-windows-gnu"
 ```
 
 If Zig linking fails, the flake falls back to GCC-based cross-compilation. Ensure all dependencies and features are correctly configured in `rust-pty/Cargo.toml`.
