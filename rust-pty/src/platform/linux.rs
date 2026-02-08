@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
     thread,
     os::unix::io::RawFd,
-    io::{Read, Write},
+    io::{Read, Write, ErrorKind},
 };
 use libc;
 
@@ -88,10 +88,16 @@ impl PtyImpl {
             let killer_clone = killer_clone.clone();
             thread::spawn(move || {
                 debug("read-thread started");
-                let mut buf = vec![0; 8192];
+                let mut buf = vec![0; 65536];
 
                 // Get PTY file descriptor from the master
                 let pty_fd = master_clone.lock().unwrap().as_raw_fd().expect("Failed to get PTY FD");
+
+                // Make PTY FD non-blocking
+                unsafe {
+                    let flags = libc::fcntl(pty_fd, libc::F_GETFL);
+                    libc::fcntl(pty_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
 
                 // Take writer ONCE before loop
                 let mut writer = match master_clone.lock().unwrap().take_writer() {
@@ -119,6 +125,8 @@ impl PtyImpl {
                     },
                 ];
 
+                let mut control_buf: Vec<u8> = Vec::with_capacity(8192); // Pre-alloc for typical writes
+
                 loop {
                     debug("read-thread: polling...");
                     let ret = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
@@ -129,109 +137,124 @@ impl PtyImpl {
                         break;
                     }
 
-                    // Check for PTY data
-                    if pollfds[0].revents & libc::POLLIN != 0 {
-                        debug("read-thread: PTY has data");
-                        match rdr.read(&mut buf) {
-                            Ok(0) => {
-                                debug("read-thread: got Ok(0) - EOF");
+                    // Handle control first to avoid input delays
+                    if pollfds[1].revents & libc::POLLIN != 0 {
+                        debug("read-thread: control pipe has data");
+
+                        // Read ALL available data non-blocking (no spin)
+                        let mut temp_buf = [0u8; 8192];
+                        loop {
+                            let n = unsafe { libc::read(control_read_fd, temp_buf.as_mut_ptr() as *mut libc::c_void, temp_buf.len()) };
+                            if n < 0 {
+                                let err = std::io::Error::last_os_error();
+                                if err.kind() == std::io::ErrorKind::WouldBlock || err.kind() == std::io::ErrorKind::Interrupted {
+                                    break; // No more data, stop reading
+                                }
+                                debug(&format!("read-thread: control read error: {}", err));
                                 break;
+                            } else if n == 0 {
+                                break; // EOF
                             }
-                            Ok(n) => {
-                                debug(&format!("read-thread: got Ok({}) bytes", n));
-                                let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                            control_buf.extend_from_slice(&temp_buf[0..n as usize]);
+                        }
+
+                        // Now parse COMPLETE messages from control_buf
+                        let mut pos = 0;
+                        while pos < control_buf.len() {
+                            if control_buf.len() - pos < 1 {
+                                break; // Partial type, wait for next poll
                             }
-                            Err(e) => {
-                                debug(&format!("read-thread: got Err: {}", e));
-                                break;
+                            let msg_type = control_buf[pos];
+                            pos += 1;
+
+                            match msg_type {
+                                1 => { // Write
+                                    if control_buf.len() - pos < 4 {
+                                        pos -= 1; // Rewind type, partial
+                                        break;
+                                    }
+                                    let data_len = u32::from_le_bytes([control_buf[pos], control_buf[pos+1], control_buf[pos+2], control_buf[pos+3]]) as usize;
+                                    pos += 4;
+
+                                    if control_buf.len() - pos < data_len {
+                                        pos -= 5; // Rewind type+len, partial
+                                        break;
+                                    }
+                                    let data = &control_buf[pos..pos + data_len];
+                                    // Write to writer (as before)
+                                    if let Err(e) = writer.write_all(data) {
+                                        debug(&format!("read-thread: write error: {}", e));
+                                    } else if let Err(e) = writer.flush() {
+                                        debug(&format!("read-thread: flush error: {}", e));
+                                    }
+                                    pos += data_len;
+                                }
+                                2 => { // Resize
+                                    if control_buf.len() - pos < 4 {
+                                        pos -= 1; // Rewind type, partial
+                                        break;
+                                    }
+                                    let rows = u16::from_le_bytes([control_buf[pos], control_buf[pos+1]]);
+                                    let cols = u16::from_le_bytes([control_buf[pos+2], control_buf[pos+3]]);
+                                    pos += 4;
+                                    // Resize (as before)
+                                    if let Err(e) = master_clone.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
+                                        debug(&format!("read-thread: resize error: {}", e));
+                                    }
+                                }
+                                3 => { // Kill
+                                    // No payload
+                                    // Kill (as before)
+                                    if let Ok(mut k) = killer_clone.lock() {
+                                        let _ = k.kill();
+                                    }
+                                    let _ = tx.send(Msg::End);
+                                    // Drain remaining control_buf if needed, but break
+                                    break;
+                                }
+                                _ => {
+                                    debug(&format!("read-thread: unknown message type: {}", msg_type));
+                                    // Skip or error?
+                                }
                             }
+                        }
+
+                        // Remove processed bytes from control_buf
+                        if pos > 0 {
+                            control_buf.drain(0..pos);
                         }
                     }
 
-                    // Check for control pipe data (control events)
-                    if pollfds[1].revents & libc::POLLIN != 0 {
-                        debug("read-thread: control pipe has data");
-                        
-                        // Read with retry for full buffer
-                        let read_full = |fd: RawFd, buf: &mut [u8]| -> Result<usize, std::io::Error> {
-                            let mut pos = 0;
-                            while pos < buf.len() {
-                                let n = unsafe { libc::read(fd, buf[pos..].as_mut_ptr() as *mut libc::c_void, buf.len() - pos) };
-                                if n < 0 {
-                                    let err = std::io::Error::last_os_error();
-                                    if err.kind() != std::io::ErrorKind::WouldBlock && err.kind() != std::io::ErrorKind::Interrupted {
-                                        return Err(err);
-                                    }
-                                    continue;
-                                } else if n == 0 {
-                                    return Ok(pos); // EOF
+                    // Handle PTY data second
+                    if pollfds[0].revents & libc::POLLIN != 0 {
+                        debug("read-thread: PTY has data");
+                        loop {
+                            match rdr.read(&mut buf) {
+                                Ok(0) => {
+                                    debug("read-thread: got Ok(0) - EOF");
+                                    break;
                                 }
-                                pos += n as usize;
-                            }
-                            Ok(pos)
-                        };
-
-                        let mut msg_type_buf = [0u8; 1];
-                        if read_full(control_read_fd, &mut msg_type_buf).unwrap_or(0) != 1 { continue; }
-                        let msg_type = msg_type_buf[0];
-                        debug(&format!("read-thread: received control message type: {}", msg_type));
-                        
-                        match msg_type {
-                            1 => { // Write
-                                // Read data length
-                                let mut len_buf = [0u8; 4];
-                                if read_full(control_read_fd, &mut len_buf).unwrap_or(0) != 4 { continue; }
-                                let data_len = u32::from_le_bytes(len_buf) as usize;
-                                
-                                // Read data
-                                let mut data_buf = vec![0u8; data_len];
-                                if read_full(control_read_fd, &mut data_buf).unwrap_or(0) != data_len { continue; }
-                                
-                                debug(&format!("read-thread: writing {} bytes", data_len));
-                                // Use the pre-taken writer
-                                if let Err(e) = writer.write_all(&data_buf) {
-                                    debug(&format!("read-thread: write error: {}", e));
-                                    continue;
+                                Ok(n) => {
+                                    debug(&format!("read-thread: got Ok({}) bytes", n));
+                                    let _ = tx.send(Msg::Data(buf[..n].to_vec()));
                                 }
-                                if let Err(e) = writer.flush() {
-                                    debug(&format!("read-thread: flush error: {}", e));
+                                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                                Err(e) => {
+                                    debug(&format!("read-thread: read error: {}", e));
+                                    break;
                                 }
-                            }
-                            2 => { // Resize
-                                // Read rows and cols (5 bytes total: 1 msg_type + 2 rows + 2 cols)
-                                let mut size_buf = [0u8; 4];
-                                if read_full(control_read_fd, &mut size_buf).unwrap_or(0) != 4 { continue; }
-                                let rows = u16::from_le_bytes([size_buf[0], size_buf[1]]);
-                                let cols = u16::from_le_bytes([size_buf[2], size_buf[3]]);
-                                
-                                debug(&format!("read-thread: resizing to {}x{}", rows, cols));
-                                // Perform the resize operation
-                                if let Err(e) = master_clone.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
-                                    debug(&format!("read-thread: resize error: {}", e));
-                                }
-                            }
-                            3 => { // Kill
-                                debug("read-thread: killing process");
-                                // Perform the kill operation
-                                if let Ok(mut k) = killer_clone.lock() {
-                                    let _ = k.kill();
-                                }
-                                let _ = tx.send(Msg::End); // Signal end after kill
-                                break; // Graceful shutdown
-                            }
-                            _ => {
-                                debug(&format!("read-thread: unknown message type: {}", msg_type));
                             }
                         }
                     }
 
                     // Check for other events (errors, etc.)
-                    if pollfds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-                        debug("read-thread: PTY error/hangup");
+                    if pollfds[0].revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+                        debug("read-thread: PTY error");
                         break;
                     }
-                    if pollfds[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-                        debug("read-thread: control pipe error/hangup");
+                    if pollfds[1].revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+                        debug("read-thread: control pipe error");
                         break;
                     }
                 }

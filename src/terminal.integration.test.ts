@@ -134,6 +134,23 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
       hasExited = true;
     });
 
+    // Helper to wait for specific output
+    const waitForOutput = (expected: string, timeoutMs = 2000): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        const check = () => {
+          if (dataReceived.includes(expected)) {
+            resolve();
+          } else if (hasExited) {
+            reject(new Error(`Process exited before finding "${expected}"`));
+          } else {
+            setTimeout(check, 50);
+          }
+        };
+        setTimeout(() => reject(new Error(`Timeout waiting for "${expected}"`)), timeoutMs);
+        check();
+      });
+    };
+
     // Give the shell time to start
     await new Promise((resolve) => setTimeout(resolve, isWindows ? 500 : 100));
 
@@ -144,9 +161,9 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
       terminal.write("exit\r\n");
     } else {
       terminal.write("echo Hello\n");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitForOutput("Hello");
       terminal.write("echo World\n");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitForOutput("World");
       terminal.write("exit\n");
     }
 
