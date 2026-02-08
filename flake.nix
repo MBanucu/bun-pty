@@ -23,6 +23,7 @@
             rustup  # Added for managing Rust targets
             zig  # For zigbuild cross-compilation
             bun
+            clippy
             bashInteractive
           ];
         };

@@ -5,7 +5,7 @@ use super::super::{
 use super::helpers::{HandleReader, HandleWriter};
 use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::unbounded;
-use portable_pty::windows::ConPtyMaster;
+use portable_pty::win::ConPtyMaster;
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use std::{
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
@@ -16,8 +16,9 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
-    Storage::FileSystem::{SetNamedPipeHandleState, PIPE_NOWAIT, SECURITY_ATTRIBUTES},
-    System::Pipes::CreatePipe,
+    Security::SECURITY_ATTRIBUTES,
+    Storage::FileSystem::CreatePipe,
+    System::Pipes::{SetNamedPipeHandleState, PIPE_NOWAIT},
 };
 
 pub struct PtyImpl {

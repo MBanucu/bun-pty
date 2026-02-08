@@ -1,9 +1,7 @@
 use super::super::io_helpers::{NonBlockingReader, NonBlockingWriter, PtyIoError};
 use std::io::Error;
-use windows_sys::Win32::{
-    Foundation::HANDLE,
-    Storage::FileSystem::{ReadFile, WriteFile},
-};
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 
 // Windows-specific error codes
 const ERROR_NO_DATA: i32 = 232;
