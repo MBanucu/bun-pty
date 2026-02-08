@@ -1,27 +1,5 @@
-// Windows-specific implementation (event-driven using WaitForMultipleObjects)
-use crate::pty::{Command, Msg, PtyTrait, Reader};
-use crossbeam::channel::{unbounded, Sender};
-use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
-use std::{
-    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
-    thread,
-    os::windows::io::OwnedHandle,
-};
-use windows_sys::Win32::{
-    Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0},
-    System::{
-        Pipes::{CreatePipe, PIPE_ACCESS_INBOUND},
-        Threading::{WaitForMultipleObjects, INFINITE},
-        Pipes::PIPE_NOWAIT,
-    },
-    Security::SECURITY_ATTRIBUTES,
-    Storage::FileSystem::{SetNamedPipeHandleState, ReadFile, WriteFile},
-};
-
-fn debug(msg: &str) {
-    if std::env::var("BUN_PTY_DEBUG").unwrap_or_default() == "1" {
-        eprintln!("[rust-pty] {msg}");
-    }
+// Windows-specific implementation (shared with macOS, as portable-pty handles cross-platform)
+pub use super::common::*;
 }
 
 // Constants from linux/helpers.rs
