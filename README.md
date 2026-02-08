@@ -12,6 +12,7 @@ A cross-platform pseudo-terminal (PTY) implementation for Bun, powered by Rust's
 - **Simple API** - Clean Promise-based API similar to node-pty
 - **Type-safe** - Complete TypeScript definitions included
 - **Efficient** - Rust backend with proper error handling and multithreading
+- **Optimized for Concurrency** - Worker-thread polling minimizes main-thread CPU usage for multiple PTYs
 - **Zero dependencies** - No external JavaScript dependencies required
 - **Modern** - Built specifically for Bun using its FFI capabilities
 
@@ -151,6 +152,7 @@ Creates and spawns a new pseudoterminal.
   - `rows`: Number of rows (default: 24)
   - `cwd`: Working directory (default: process.cwd())
   - `env`: Environment variables
+  - `pollInterval`: Polling interval in milliseconds for output reading (default: 50)
 
 Returns an `IPty` instance.
 
@@ -188,7 +190,33 @@ interface IDisposable {
 }
 ```
 
-## 🧪 Testing
+## ⚡ Performance Optimizations
+
+bun-pty is optimized for high-concurrency scenarios like terminal emulators or SSH servers. Key optimizations include:
+
+- **Worker-Thread Polling**: PTY output reading runs in dedicated Bun Worker threads, preventing main-thread blocking and enabling better responsiveness for applications with multiple concurrent terminals.
+- **Configurable Polling**: Adjust polling frequency via the `pollInterval` option (default: 50ms) to balance between responsiveness and CPU usage.
+- **Event-Driven Architecture**: Uses Rust channels and worker messaging for efficient data flow, minimizing busy-waiting.
+
+For applications with many idle PTYs, the worker-based approach significantly reduces main-thread CPU load compared to traditional polling implementations.
+
+### Example with Custom Polling
+
+```typescript
+import { spawn } from "bun-pty";
+
+// Fast polling for responsive applications (lower latency, higher CPU)
+const terminal = spawn("bash", [], {
+  name: "xterm-256color",
+  pollInterval: 10  // Check for output every 10ms
+});
+
+// Conservative polling for background processes (lower CPU, higher latency)
+const backgroundTerminal = spawn("long-running-command", [], {
+  name: "xterm-256color",
+  pollInterval: 200  // Check every 200ms
+});
+```
 
 bun-pty uses [Bun's built-in test runner](https://bun.com/docs/test) for fast, Jest-compatible testing.
 
