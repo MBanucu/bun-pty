@@ -82,8 +82,11 @@ fn parse_env_string(env_ptr: *const c_char) -> HashMap<String, String> {
 pub enum Msg {
     Data(Vec<u8>),
     End,
+    #[allow(dead_code)]
     Write(Vec<u8>),
+    #[allow(dead_code)]
     Resize(PtySize),
+    #[allow(dead_code)]
     Kill,
 }
 

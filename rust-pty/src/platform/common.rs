@@ -1,5 +1,5 @@
 // Common blocking implementation for macOS (blocking read-thread with separate write-thread)
-use crate::pty::{Command, Msg, PtyTrait, Reader};
+use crate::pty::{Msg, Reader};
 use crossbeam::channel::{unbounded, Sender};
 use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
 use std::{
@@ -7,12 +7,14 @@ use std::{
     thread,
 };
 
+#[allow(dead_code)]
 fn debug(msg: &str) {
     if std::env::var("BUN_PTY_DEBUG").unwrap_or_default() == "1" {
         eprintln!("[rust-pty] {msg}");
     }
 }
 
+#[allow(dead_code)]
 pub struct PtyImpl {
     reader: crate::pty::Reader,
     tx_w: Sender<(Vec<u8>, usize)>,
@@ -23,6 +25,7 @@ pub struct PtyImpl {
     pid: i32,
 }
 
+#[allow(dead_code)]
 impl PtyImpl {
     pub fn new(cmd: &crate::pty::Command, size: PtySize) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let sys = native_pty_system();

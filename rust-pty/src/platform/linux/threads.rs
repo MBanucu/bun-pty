@@ -4,7 +4,6 @@ use crossbeam::channel::Sender;
 use portable_pty::{ChildKiller, MasterPty};
 use std::{
     io::{self, ErrorKind, Read},
-    os::unix::io::RawFd,
     sync::{Arc, Mutex, atomic::Ordering},
     thread,
 };

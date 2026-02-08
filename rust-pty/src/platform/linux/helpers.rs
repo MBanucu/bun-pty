@@ -1,5 +1,5 @@
 use std::io::{self, ErrorKind, Write};
-use libc::{self, pollfd, POLLIN, POLLHUP, POLLERR, POLLNVAL};
+use libc;
 use portable_pty::{PtySize, MasterPty, ChildKiller};
 use std::sync::{Arc, Mutex};
 use crossbeam::channel::Sender;

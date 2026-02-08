@@ -10,7 +10,9 @@ use crossbeam::channel::unbounded;
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
+    #[allow(dead_code)]
     pub(crate) master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    #[allow(dead_code)]
     pub(crate) killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     pub(crate) exited: AtomicBool,
     pub(crate) exit_code: AtomicI32,
