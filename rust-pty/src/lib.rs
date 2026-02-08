@@ -148,7 +148,45 @@ pub extern "C" fn bun_pty_get_exit_code(handle: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bun_pty_close(handle: c_int) {
+pub unsafe extern "C" fn bun_pty_close(handle: c_int) {
     if handle <= 0 { return; }
     REG.lock().unwrap().remove(&(handle as u32));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bun_pty_wait(
+    handle: c_int,
+    buf: *mut u8,
+    len: c_int,
+    out_type: *mut c_int,
+) -> c_int {
+    if handle <= 0 || buf.is_null() || len <= 0 || out_type.is_null() { return ERROR; }
+    with(handle as u32, |pty| {
+        debug("bun_pty_wait: starting");
+        let max = len as usize;
+
+        // For now, implement as a simple read that returns data or exit
+        // In the full implementation, this would wait for either data or control events
+        match pty.read(true) { // blocking = true
+            Ok(pty::Msg::Data(d)) if !d.is_empty() => {
+                let n = d.len().min(max);
+                unsafe { std::ptr::copy_nonoverlapping(d.as_ptr(), buf, n); }
+                unsafe { *out_type = 0; } // DATA
+                debug(&format!("bun_pty_wait: returning {} bytes data", n));
+                n as c_int
+            }
+            Ok(pty::Msg::End) => {
+                unsafe { *out_type = 1; } // EXIT
+                debug("bun_pty_wait: returning exit");
+                0
+            }
+            _ => {
+                // For control events, we'd return different codes
+                // For now, return no data
+                unsafe { *out_type = 0; } // DATA (empty)
+                debug("bun_pty_wait: returning no data");
+                0
+            }
+        }
+    })
 }

@@ -1,4 +1,4 @@
-// pty-worker.ts - Worker for reading PTY output with adaptive polling to minimize CPU usage
+// pty-worker.ts - Worker for reading PTY output with event-driven blocking
 
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { Buffer } from "node:buffer";
@@ -11,7 +11,7 @@ const symbols = loadLibrary() as any;
 interface InitMessage {
 	type: 'init';
 	handle: number;
-	pollInterval: number;  // Used as minInterval
+	pollInterval: number;  // Kept for backward compatibility but not used
 }
 
 interface WriteMessage {
@@ -32,12 +32,6 @@ interface KillMessage {
 type Message = InitMessage | WriteMessage | ResizeMessage | KillMessage;
 
 let handle = -1;
-let minInterval = 1;  // ms, for active/low-latency polling
-let maxInterval = 50;  // ms, for idle/high-efficiency
-let backoffFactor = 2;  // Multiplier for exponential backoff
-let idleThreshold = 100;  // Loops without data before starting backoff
-let currentInterval = minInterval;
-let idleLoops = 0;
 let running = false;
 const decoder = new TextDecoder("utf-8");
 
@@ -46,61 +40,31 @@ async function startReadLoop() {
 	running = true;
 
 	const buf = Buffer.allocUnsafe(4096);
+	const typeBuf = Buffer.alloc(4); // int32 for event type
 
 	while (running) {
-		const n = symbols.bun_pty_read(handle, ptr(buf), buf.length, 0);  // Non-blocking read
+		const n = symbols.bun_pty_wait(handle, ptr(buf), buf.length, ptr(typeBuf));
 
-		if (n > 0) {
-			// Data received: post and reset polling to fast mode
-			const decoded = decoder.decode(buf.subarray(0, n), { stream: true });
-			if (decoded) {
-				postMessage({ type: 'data', data: decoded });
-			}
-			idleLoops = 0;
-			currentInterval = minInterval;
-		} else if (n === -2) {
-			// Child exited: wait for valid exit code if needed
-			let exitCode = symbols.bun_pty_get_exit_code(handle);
-			while (exitCode === -1 && running) {
-				await new Promise(r => setTimeout(r, minInterval));
-				exitCode = symbols.bun_pty_get_exit_code(handle);
-			}
-			if (running) {
-				const remaining = decoder.decode();  // Flush decoder
-				if (remaining) {
-					postMessage({ type: 'data', data: remaining });
+		const eventType = typeBuf.readInt32LE(0);
+
+		if (eventType === 0) { // DATA
+			if (n > 0) {
+				const decoded = decoder.decode(buf.subarray(0, n), { stream: true });
+				if (decoded) {
+					postMessage({ type: 'data', data: decoded });
 				}
-				postMessage({ type: 'exit', exitCode });
 			}
-			break;
-		} else if (n < 0) {
-			// Error: flush and exit
-			const remaining = decoder.decode();
+		} else if (eventType === 1) { // EXIT
+			const remaining = decoder.decode();  // Flush decoder
 			if (remaining) {
 				postMessage({ type: 'data', data: remaining });
 			}
+			postMessage({ type: 'exit', exitCode: n });
 			break;
+		} else if (eventType === 2) { // CONTROL_EVENT
+			// Handle control events if needed
+			// For now, just continue
 		}
-
-		// Check for exit every loop, in case process exited without EOF
-		const currentExitCode = symbols.bun_pty_get_exit_code(handle);
-		if (currentExitCode !== -1) {
-			const remaining = decoder.decode();
-			if (remaining) {
-				postMessage({ type: 'data', data: remaining });
-			}
-			postMessage({ type: 'exit', exitCode: currentExitCode });
-			break;
-		}
-
-		// No data: increment idle and back off if threshold met
-		idleLoops++;
-		if (idleLoops > idleThreshold) {
-			currentInterval = Math.min(currentInterval * backoffFactor, maxInterval);
-		}
-
-		// Yield with current adaptive interval
-		await new Promise(r => setTimeout(r, currentInterval));
 	}
 
 	// Final cleanup on exit
@@ -112,8 +76,7 @@ onmessage = (e: MessageEvent<Message>) => {
 	switch (msg.type) {
 		case 'init':
 			handle = msg.handle;
-			minInterval = msg.pollInterval || 1;  // Allow override as min
-			currentInterval = minInterval;
+			// pollInterval kept for backward compatibility but not used in event-driven mode
 			startReadLoop();
 			break;
 		case 'write':

@@ -83,6 +83,10 @@ export const ffiDefinitions = {
 		args: [FFIType.i32, FFIType.pointer, FFIType.i32, FFIType.i32],
 		returns: FFIType.i32,
 	},
+	bun_pty_wait: {
+		args: [FFIType.i32, FFIType.pointer, FFIType.i32, FFIType.pointer],
+		returns: FFIType.i32,
+	},
 	bun_pty_resize: {
 		args: [FFIType.i32, FFIType.i32, FFIType.i32],
 		returns: FFIType.i32,

@@ -4,7 +4,12 @@ use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
 use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
     thread,
+    os::unix::io::RawFd,
+    any::Any,
+    fs::File,
+    io::Read,
 };
+use libc;
 
 fn debug(msg: &str) {
     if std::env::var("BUN_PTY_DEBUG").unwrap_or_default() == "1" {
@@ -20,6 +25,8 @@ pub struct PtyImpl {
     exited: AtomicBool,
     exit_code: AtomicI32,
     pid: i32,
+    // Control pipe for waking read-thread on control events
+    control_pipe: [RawFd; 2], // [read_fd, write_fd]
 }
 
 impl PtyImpl {
@@ -36,6 +43,20 @@ impl PtyImpl {
 
         let master = Arc::new(Mutex::new(pair.master));
 
+        // Create control pipe for waking read-thread on control events
+        let mut control_pipe = [-1, -1];
+        if unsafe { libc::pipe(control_pipe.as_mut_ptr()) } != 0 {
+            return Err("Failed to create control pipe".into());
+        }
+
+        // Make both ends non-blocking
+        unsafe {
+            let flags = libc::fcntl(control_pipe[0], libc::F_GETFL);
+            libc::fcntl(control_pipe[0], libc::F_SETFL, flags | libc::O_NONBLOCK);
+            let flags = libc::fcntl(control_pipe[1], libc::F_GETFL);
+            libc::fcntl(control_pipe[1], libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+
         let pty = Arc::new(Self {
             reader: Reader::new(rx_r),
             tx_w,
@@ -44,6 +65,7 @@ impl PtyImpl {
             exited: AtomicBool::new(false),
             exit_code: AtomicI32::new(-1),
             pid,
+            control_pipe,
         });
 
         /* wait-thread */
@@ -67,26 +89,117 @@ impl PtyImpl {
         {
             let mut rdr = master.lock().unwrap().try_clone_reader()?;
             let tx = tx_r.clone();
+            let control_read_fd = pty.control_pipe[0];
             thread::spawn(move || {
                 debug("read-thread started");
                 let mut buf = vec![0; 8192];
-                loop {
-                    debug("read-thread: attempting read...");
-                    match rdr.read(&mut buf) {
-                        Ok(0) => {
-                            debug("read-thread: got Ok(0) - EOF");
-                            break;
-                        }
-                        Ok(n) => {
-                            debug(&format!("read-thread: got Ok({}) bytes", n));
-                            let _ = tx.send(Msg::Data(buf[..n].to_vec()));
-                        }
-                        Err(e) => {
-                            debug(&format!("read-thread: got Err: {}", e));
-                            break;
+
+                // Get PTY file descriptor by downcasting the reader
+                let pty_fd = if let Some(file) = (&*rdr as &dyn Any).downcast_ref::<File>() {
+                    file.as_raw_fd()
+                } else {
+                    debug("read-thread: failed to downcast reader to File, falling back to blocking read");
+                    // Fallback to old behavior if downcast fails
+                    loop {
+                        debug("read-thread: attempting read...");
+                        match rdr.read(&mut buf) {
+                            Ok(0) => {
+                                debug("read-thread: got Ok(0) - EOF");
+                                break;
+                            }
+                            Ok(n) => {
+                                debug(&format!("read-thread: got Ok({}) bytes", n));
+                                let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                            }
+                            Err(e) => {
+                                debug(&format!("read-thread: got Err: {}", e));
+                                break;
+                            }
                         }
                     }
+                    let _ = tx.send(Msg::End);
+                    debug("read-thread: ended");
+                    return;
+                };
+
+                debug(&format!("read-thread: got PTY fd {}, control fd {}", pty_fd, control_read_fd));
+
+                // Set up pollfd structures
+                let mut pollfds = [
+                    libc::pollfd {
+                        fd: pty_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                    libc::pollfd {
+                        fd: control_read_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                ];
+
+                loop {
+                    debug("read-thread: polling...");
+                    let ret = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
+                    debug(&format!("read-thread: poll returned {}", ret));
+
+                    if ret < 0 {
+                        debug(&format!("read-thread: poll error: {}", std::io::Error::last_os_error()));
+                        break;
+                    }
+
+                    // Check for PTY data
+                    if pollfds[0].revents & libc::POLLIN != 0 {
+                        debug("read-thread: PTY has data");
+                        match rdr.read(&mut buf) {
+                            Ok(0) => {
+                                debug("read-thread: got Ok(0) - EOF");
+                                break;
+                            }
+                            Ok(n) => {
+                                debug(&format!("read-thread: got Ok({}) bytes", n));
+                                let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                            }
+                            Err(e) => {
+                                debug(&format!("read-thread: got Err: {}", e));
+                                break;
+                            }
+                        }
+                    }
+
+                    // Check for control pipe data (control events)
+                    if pollfds[1].revents & libc::POLLIN != 0 {
+                        debug("read-thread: control pipe has data");
+                        let mut control_buf = [0u8; 1];
+                        match unsafe { libc::read(control_read_fd, control_buf.as_mut_ptr() as *mut libc::c_void, 1) } {
+                            -1 => {
+                                debug(&format!("read-thread: control pipe read error: {}", std::io::Error::last_os_error()));
+                            }
+                            0 => {
+                                debug("read-thread: control pipe EOF");
+                            }
+                            1 => {
+                                debug(&format!("read-thread: received control signal: {}", control_buf[0]));
+                                // Control signals are handled by the main event loop in pty-worker.ts
+                                // We just wake up to check for pending operations
+                            }
+                            _ => {
+                                debug("read-thread: unexpected control pipe read result");
+                            }
+                        }
+                    }
+
+                    // Check for other events (errors, etc.)
+                    if pollfds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                        debug("read-thread: PTY error/hangup");
+                        break;
+                    }
+                    if pollfds[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                        debug("read-thread: control pipe error/hangup");
+                        break;
+                    }
                 }
+
                 debug("read-thread: loop exited, sending Msg::End");
                 let _ = tx.send(Msg::End);
                 debug("read-thread: ended");

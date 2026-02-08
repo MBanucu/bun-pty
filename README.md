@@ -12,6 +12,7 @@ A cross-platform pseudo-terminal (PTY) implementation for Bun, powered by Rust's
 - **Simple API** - Clean Promise-based API similar to node-pty
 - **Type-safe** - Complete TypeScript definitions included
 - **Efficient** - Rust backend with proper error handling and multithreading
+- **Event-Driven Architecture** - Zero idle CPU usage through control pipe mechanism
 - **Optimized for Concurrency** - Worker-thread polling minimizes main-thread CPU usage for multiple PTYs
 - **Zero dependencies** - No external JavaScript dependencies required
 - **Modern** - Built specifically for Bun using its FFI capabilities
@@ -152,7 +153,7 @@ Creates and spawns a new pseudoterminal.
   - `rows`: Number of rows (default: 24)
   - `cwd`: Working directory (default: process.cwd())
   - `env`: Environment variables
-  - `pollInterval`: Polling interval in milliseconds for output reading (default: 50)
+  - `pollInterval`: **Deprecated** - Polling interval was used in older versions; the event-driven architecture now uses zero idle CPU. This option is accepted for backward compatibility but has no effect.
 
 Returns an `IPty` instance.
 
@@ -177,46 +178,58 @@ interface IPty {
 }
 ```
 
-### Event Types
+## 🏗️ Architecture Details
 
-```typescript
-interface IExitEvent {
-  exitCode: number;
-  signal?: number | string;
-}
+### Event-Driven PTY Implementation
 
-interface IDisposable {
-  dispose(): void;
-}
+bun-pty implements an advanced **Option A** architecture that provides true event-driven PTY operations:
+
+#### Core Components
+
+- **Control Pipe**: Unix pipe (Linux/macOS) or event handle (Windows) for instant thread signaling
+- **Event Types**: Enhanced message passing with `Data`, `Write`, `Resize`, `Kill`, and `Exit` messages
+- **Blocking FFI**: `bun_pty_wait()` function that blocks until data or control events arrive
+- **Poll-Based Read Thread**: Uses OS-level `poll()`/`select()` on both PTY file descriptor and control pipe
+
+#### Thread Architecture
+
+```
+Main Thread ──▶ Worker Thread ──▶ Rust FFI ──▶ Read Thread
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      poll(pty_fd, control_fd)
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      Data/Control Event
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      Return to Worker
+     │                │                │             │
+     │                │                │             ▼
+     │                │                │      Fire JavaScript Events
+     │                │                │             │
+     ▼                ▼                ▼             ▼
+User Code ◀───── Event Callbacks ◀─────── bun_pty_wait() ◀─── Msg
 ```
 
-## ⚡ Performance Optimizations
+#### Why Option A?
 
-bun-pty is optimized for high-concurrency scenarios like terminal emulators or SSH servers. Key optimizations include:
+Traditional PTY implementations use polling loops that consume CPU even when idle. Option A eliminates this by:
 
-- **Worker-Thread Polling**: PTY output reading runs in dedicated Bun Worker threads, preventing main-thread blocking and enabling better responsiveness for applications with multiple concurrent terminals.
-- **Configurable Polling**: Adjust polling frequency via the `pollInterval` option (default: 50ms) to balance between responsiveness and CPU usage.
-- **Event-Driven Architecture**: Uses Rust channels and worker messaging for efficient data flow, minimizing busy-waiting.
+1. **Blocking on Events**: Read thread blocks until actual PTY data arrives
+2. **Instant Control Response**: Control operations (write/resize/kill) wake the thread immediately
+3. **OS-Level Efficiency**: Uses `poll()`/`select()` for true event-driven behavior
+4. **Zero Idle CPU**: No busy-waiting or timer-based polling when PTY is inactive
 
-For applications with many idle PTYs, the worker-based approach significantly reduces main-thread CPU load compared to traditional polling implementations.
+This makes bun-pty ideal for applications that maintain many PTYs simultaneously, such as:
+- Terminal multiplexers
+- IDE integrated terminals
+- SSH connection pools
+- Long-running background processes
 
-### Example with Custom Polling
+### Backward Compatibility
 
-```typescript
-import { spawn } from "bun-pty";
-
-// Fast polling for responsive applications (lower latency, higher CPU)
-const terminal = spawn("bash", [], {
-  name: "xterm-256color",
-  pollInterval: 10  // Check for output every 10ms
-});
-
-// Conservative polling for background processes (lower CPU, higher latency)
-const backgroundTerminal = spawn("long-running-command", [], {
-  name: "xterm-256color",
-  pollInterval: 200  // Check every 200ms
-});
-```
+The event-driven architecture is fully backward compatible. Existing code using `pollInterval` will continue to work unchanged, though the option is now ignored since polling is no longer used.
 
 bun-pty uses [Bun's built-in test runner](https://bun.com/docs/test) for fast, Jest-compatible testing.
 
