@@ -302,14 +302,23 @@ For a reproducible development environment with cross-compilation support:
 # Enter the default development shell
 nix develop
 
-# For Windows cross-compilation
+# For Windows cross-compilation with Zig linker
 nix develop ./windows
 
-# Build the cross-compiled Windows library
-nix build ./windows
+# Build the Windows binary inside the shell
+cd ../rust-pty
+cargo zigbuild --release --target x86_64-pc-windows-gnu
 
-# The output will be in ./windows/result/lib/rust_pty.dll
+# The output will be in rust-pty/target/x86_64-pc-windows-gnu/release/rust_pty.dll
 ```
+
+Alternatively, you can build directly without entering the shell:
+
+```bash
+nix develop ./windows --command -- sh -c "cd ../rust-pty && cargo zigbuild --release --target x86_64-pc-windows-gnu"
+```
+
+If Zig linking fails, the flake falls back to GCC-based cross-compilation. Ensure all dependencies and features are correctly configured in `rust-pty/Cargo.toml`.
 
 ## ❓ Troubleshooting
 
