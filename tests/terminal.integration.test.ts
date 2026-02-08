@@ -1,6 +1,6 @@
 import { describe, expect, test, afterEach } from "bun:test";
-import { Terminal } from "./terminal";
-import type { IExitEvent } from "./interfaces";
+import { Terminal } from "../src/terminal";
+import type { IExitEvent } from "../src/interfaces";
 
 // This is an integration test file that runs tests against the actual Rust backend.
 // Only run if the environment variable RUN_INTEGRATION_TESTS is set to "true"

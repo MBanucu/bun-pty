@@ -1,5 +1,5 @@
 import { expect, test, describe, beforeEach } from "bun:test";
-import { EventEmitter, IDisposable } from "./interfaces";
+import { EventEmitter, IDisposable } from "../src/interfaces";
 
 describe("EventEmitter", () => {
 	let emitter: EventEmitter<string>;

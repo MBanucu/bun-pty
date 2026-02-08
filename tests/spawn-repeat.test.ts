@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Subprocess } from 'bun'
-import { Terminal } from './terminal'
+import { Terminal } from '../src/terminal'
 
 describe('PTY Echo Behavior', () => {
     class TestSpawner {
@@ -14,7 +14,7 @@ describe('PTY Echo Behavior', () => {
                 cmd: [
                     'bun',
                     'test',
-                    'terminal.integration.test.ts',
+                    'tests/spawn-repeat.test.ts',
                     '--test-name-pattern',
                     'should receive initial data once',
                 ],

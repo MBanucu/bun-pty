@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
-import { DEFAULT_COLS, DEFAULT_ROWS, DEFAULT_FILE, DEFAULT_NAME } from "./terminal";
-import type { IPtyForkOptions, IExitEvent } from "./interfaces";
+import { DEFAULT_COLS, DEFAULT_ROWS, DEFAULT_FILE, DEFAULT_NAME } from "../src/terminal";
+import type { IPtyForkOptions, IExitEvent } from "../src/interfaces";
 
 describe("Terminal configuration and options", () => {
 	describe("default values", () => {
