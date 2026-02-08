@@ -119,8 +119,13 @@ export class Terminal implements IPty {
 
 	write(data: string) {
 		if (this._closing) return;
-		if (this._worker) {
-			this._worker.postMessage({ type: 'write', data });
+		console.log('[terminal] write:', JSON.stringify(data));
+		if (this.handle >= 0) {
+			const buf = Buffer.from(data, "utf8");
+			const ret = symbols.bun_pty_write(this.handle, ptr(buf), buf.length);
+			if (ret < 0) {
+				console.error(`Write failed: ${ret}`);
+			}
 		}
 	}
 
@@ -128,16 +133,24 @@ export class Terminal implements IPty {
 		if (this._closing) return;
 		this._cols = cols;
 		this._rows = rows;
-		if (this._worker) {
-			this._worker.postMessage({ type: 'resize', cols, rows });
+		if (this.handle >= 0) {
+			const ret = symbols.bun_pty_resize(this.handle, cols, rows);
+			if (ret < 0) {
+				console.error(`Resize failed: ${ret}`);
+			}
 		}
 	}
 
 	kill(signal = "SIGTERM") {
 		if (this._closing) return;
 		this._closing = true;
+		if (this.handle >= 0) {
+			const ret = symbols.bun_pty_kill(this.handle);
+			if (ret < 0) {
+				console.error(`Kill failed: ${ret}`);
+			}
+		}
 		if (this._worker) {
-			this._worker.postMessage({ type: 'kill' });
 			this._worker.terminate();
 			this._worker = null;
 		}

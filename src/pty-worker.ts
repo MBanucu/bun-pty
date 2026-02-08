@@ -13,22 +13,7 @@ interface InitMessage {
 	handle: number;
 }
 
-interface WriteMessage {
-	type: 'write';
-	data: string;
-}
-
-interface ResizeMessage {
-	type: 'resize';
-	cols: number;
-	rows: number;
-}
-
-interface KillMessage {
-	type: 'kill';
-}
-
-type Message = InitMessage | WriteMessage | ResizeMessage | KillMessage;
+type Message = InitMessage;
 
 let handle = -1;
 let running = false;
@@ -58,7 +43,8 @@ async function startReadLoop() {
 			if (remaining) {
 				postMessage({ type: 'data', data: remaining });
 			}
-			postMessage({ type: 'exit', exitCode: n });
+			const exitCode = symbols.bun_pty_get_exit_code(handle);
+			postMessage({ type: 'exit', exitCode });
 			break;
 		} else if (eventType === 2) { // CONTROL_EVENT
 			// Handle control events if needed
@@ -76,32 +62,6 @@ onmessage = (e: MessageEvent<Message>) => {
 		case 'init':
 			handle = msg.handle;
 			startReadLoop();
-			break;
-		case 'write':
-			if (handle >= 0) {
-				const buf = Buffer.from(msg.data, "utf8");
-				const ret = symbols.bun_pty_write(handle, ptr(buf), buf.length);
-				if (ret < 0) {
-					console.error(`Write failed: ${ret}`);
-				}
-			}
-			break;
-		case 'resize':
-			if (handle >= 0) {
-				const ret = symbols.bun_pty_resize(handle, msg.cols, msg.rows);
-				if (ret < 0) {
-					console.error(`Resize failed: ${ret}`);
-				}
-			}
-			break;
-		case 'kill':
-			running = false;
-			if (handle >= 0) {
-				const ret = symbols.bun_pty_kill(handle);
-				if (ret < 0) {
-					console.error(`Kill failed: ${ret}`);
-				}
-			}
 			break;
 	}
 };

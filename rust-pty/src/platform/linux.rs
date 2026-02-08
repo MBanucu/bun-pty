@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
     thread,
     os::unix::io::RawFd,
-    io::Read,
+    io::{Read, Write},
 };
 use libc;
 
@@ -93,6 +93,16 @@ impl PtyImpl {
                 // Get PTY file descriptor from the master
                 let pty_fd = master_clone.lock().unwrap().as_raw_fd().expect("Failed to get PTY FD");
 
+                // Take writer ONCE before loop
+                let mut writer = match master_clone.lock().unwrap().take_writer() {
+                    Ok(w) => w,
+                    Err(e) => {
+                        debug(&format!("read-thread: failed to take writer: {}", e));
+                        let _ = tx.send(Msg::End); // Early exit on failure
+                        return;
+                    }
+                };
+
                 debug(&format!("read-thread: got PTY fd {}, control fd {}", pty_fd, control_read_fd));
 
                 // Set up pollfd structures
@@ -178,13 +188,13 @@ impl PtyImpl {
                                 if read_full(control_read_fd, &mut data_buf).unwrap_or(0) != data_len { continue; }
                                 
                                 debug(&format!("read-thread: writing {} bytes", data_len));
-                                // Perform the write operation
-                                if let Err(e) = master_clone.lock().unwrap().take_writer().and_then(|mut wtr| {
-                                    wtr.write_all(&data_buf)?;
-                                    wtr.flush()?;
-                                    Ok(())
-                                }) {
+                                // Use the pre-taken writer
+                                if let Err(e) = writer.write_all(&data_buf) {
                                     debug(&format!("read-thread: write error: {}", e));
+                                    continue;
+                                }
+                                if let Err(e) = writer.flush() {
+                                    debug(&format!("read-thread: flush error: {}", e));
                                 }
                             }
                             2 => { // Resize
@@ -206,6 +216,8 @@ impl PtyImpl {
                                 if let Ok(mut k) = killer_clone.lock() {
                                     let _ = k.kill();
                                 }
+                                let _ = tx.send(Msg::End); // Signal end after kill
+                                break; // Graceful shutdown
                             }
                             _ => {
                                 debug(&format!("read-thread: unknown message type: {}", msg_type));
@@ -240,6 +252,7 @@ impl PtyTrait for PtyImpl {
     }
 
     fn write(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        debug(&format!("PtyImpl::write: writing {} bytes", data.len()));
         // Send write command through control pipe
         let msg_type = 1u8; // 1 = write
         let len_bytes = (data.len() as u32).to_le_bytes();
@@ -267,6 +280,7 @@ impl PtyTrait for PtyImpl {
         write_full(self.control_pipe[1], &[msg_type])?;
         write_full(self.control_pipe[1], &len_bytes)?;
         write_full(self.control_pipe[1], data)?;
+        debug("PtyImpl::write: write to control pipe succeeded");
         
         Ok(())
     }
