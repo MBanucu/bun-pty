@@ -162,6 +162,7 @@ impl PtyImpl {
                             }
                             Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                            Err(e) if cfg!(windows) && e.raw_os_error() == Some(232) => break, // ERROR_NO_DATA on Windows
                             Err(e) => {
                                 debug(&format!("read-thread: read error: {}", e));
                                 let _ = tx.send(Msg::End);
