@@ -192,13 +192,16 @@ impl Pty {
         {
             let pty_clone = pty.clone();
             thread::spawn(move || {
+                debug("wait-thread: waiting for child...");
                 let status = child.wait();
+                debug("wait-thread: child.wait() returned");
                 if let Ok(exit_status) = status {
                     let code = exit_status.exit_code() as i32;
                     debug(&format!("exit_status.exit_code(): {}", code));
                     pty_clone.exit_code.store(code, Ordering::Relaxed);
                 }
                 pty_clone.exited.store(true, Ordering::Relaxed);
+                debug("wait-thread: exited and code stored");
             });
         }
 
@@ -207,15 +210,28 @@ impl Pty {
             let mut rdr = master.lock().unwrap().try_clone_reader()?;
             let tx = tx_r.clone();
             thread::spawn(move || {
+                debug("read-thread started");
                 let mut buf = vec![0; 8192];
                 loop {
+                    debug("read-thread: attempting read...");
                     match rdr.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => { let _ = tx.send(Msg::Data(buf[..n].to_vec())); }
-                        Err(_) => break,
+                        Ok(0) => {
+                            debug("read-thread: got Ok(0) - EOF");
+                            break;
+                        }
+                        Ok(n) => {
+                            debug(&format!("read-thread: got Ok({}) bytes", n));
+                            let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                        }
+                        Err(e) => {
+                            debug(&format!("read-thread: got Err: {}", e));
+                            break;
+                        }
                     }
                 }
+                debug("read-thread: loop exited, sending Msg::End");
                 let _ = tx.send(Msg::End);
+                debug("read-thread: ended");
             });
         }
 
@@ -235,6 +251,7 @@ impl Pty {
 
     fn read(&self) -> Result<Msg, Box<dyn std::error::Error + Send + Sync>> {
         let m = self.reader.read()?;
+        debug(&format!("Pty::read returned: {:?}", m));
         if matches!(m, Msg::End) { self.exited.store(true, Ordering::Relaxed); }
         Ok(m)
     }
@@ -319,6 +336,7 @@ pub unsafe extern "C" fn bun_pty_read(
 ) -> c_int {
     if handle <= 0 || buf.is_null() || len <= 0 { return ERROR; }
     with(handle as u32, |pty| {
+        debug("bun_pty_read: starting");
         let max = len as usize;
 
         // 1) serve pending data first
@@ -342,10 +360,17 @@ pub unsafe extern "C" fn bun_pty_read(
                     let mut pend = pty.pending.lock().unwrap();
                     pend.extend_from_slice(&d[n..]);
                 }
+                debug(&format!("bun_pty_read: returning {} bytes data", n));
                 n as c_int
             }
-            Ok(Msg::End) => CHILD_EXITED,
-            _            => 0,                         // no data
+            Ok(Msg::End) => {
+                debug("bun_pty_read: returning CHILD_EXITED");
+                CHILD_EXITED
+            }
+            _ => {
+                debug("bun_pty_read: returning 0 (no data)");
+                0
+            }
         }
     })
 }

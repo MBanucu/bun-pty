@@ -26,6 +26,12 @@ function shQuote(s: string): string {
 	return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+function debug(...args: any[]) {
+	if (!process.env.BUN_PTY_DEBUG) return;
+	// Uncomment for verbose logging of the terminal module
+	console.log('[js]', ...args);
+}
+
 // terminal.ts  – loader fragment only
 
 function resolveLibPath(): string {
@@ -136,6 +142,7 @@ export class Terminal implements IPty {
 
 	private _readLoop = false;
 	private _closing = false;
+	private _exited = false;
 
 	// TextDecoder with streaming mode to properly handle UTF-8 across chunk boundaries
 	// Without this, multi-byte characters (like box-drawing ─) that span chunks become �
@@ -230,7 +237,21 @@ export class Terminal implements IPty {
 		const buf = Buffer.allocUnsafe(4096);
 
 		while (this._readLoop && !this._closing) {
+			debug('read loop iteration');
+			const currentExitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
+			debug(`checked exit code: ${currentExitCode}`);
+			if (currentExitCode !== -1 && !this._exited) {
+				debug(`detected exit via poll: ${currentExitCode}`);
+				this._exited = true;
+				const remaining = this._decoder.decode();
+				if (remaining) {
+					this._onData.fire(remaining);
+				}
+				this._onExit.fire({ exitCode: currentExitCode });
+				break;
+			}
 			const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
+			debug(`bun_pty_read returned n=${n}`);
 			if (n > 0) {
 				// Use streaming mode to buffer incomplete UTF-8 sequences across chunks
 				// This prevents corruption when multi-byte chars span chunk boundaries
@@ -259,5 +280,6 @@ export class Terminal implements IPty {
 				await new Promise((r) => setTimeout(r, 8));
 			}
 		}
+		debug('read loop exited');
 	}
 }
