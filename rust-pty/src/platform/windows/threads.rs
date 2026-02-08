@@ -1,13 +1,10 @@
-use super::super::{
-    control::*,
-    io_helpers::{NonBlockingReader, PtyIoError},
-};
+use super::super::{control::*, io_helpers::NonBlockingReader};
 use super::helpers::HandleReader;
 use super::pty_impl::PtyImpl;
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
-use portable_pty::win::ConPtyMaster;
-use portable_pty::{ChildKiller, MasterPty};
+use portable_pty::conpty::ConPtyMaster;
+use portable_pty::ChildKiller;
 use std::{
     io::{self, ErrorKind},
     os::windows::io::AsRawHandle,

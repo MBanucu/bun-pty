@@ -1,12 +1,9 @@
-use super::super::{
-    control::*,
-    io_helpers::{NonBlockingReader, NonBlockingWriter, PtyIoError},
-};
+use super::super::{control::*, io_helpers::NonBlockingWriter};
 use super::helpers::{HandleReader, HandleWriter};
 use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::unbounded;
-use portable_pty::win::ConPtyMaster;
-use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
+use portable_pty::conpty::ConPtyMaster;
+use portable_pty::{native_pty_system, ChildKiller, PtySize};
 use std::{
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     sync::{
@@ -65,7 +62,7 @@ impl PtyImpl {
         };
 
         unsafe {
-            if CreatePipe(&mut read_handle, &mut write_handle, Some(&sa), 0) == 0 {
+            if CreatePipe(&mut read_handle, &mut write_handle, &sa, 0) == 0 {
                 return Err("Failed to create control pipe".into());
             }
             // Set non-blocking
