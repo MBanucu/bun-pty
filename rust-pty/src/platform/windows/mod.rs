@@ -1,5 +1,5 @@
 mod helpers;
 mod pty_impl;
-// mod threads; // No longer needed - using common implementation
+mod threads;
 
 pub use pty_impl::PtyImpl;
