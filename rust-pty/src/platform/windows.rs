@@ -7,9 +7,10 @@ use std::{
     sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
     thread,
     os::windows::io::OwnedHandle,
+    io::ErrorKind,
 };
 use windows_sys::Win32::{
-    Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_FAILED, INVALID_HANDLE_VALUE},
+    Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_FAILED, INVALID_HANDLE_VALUE, GetLastError},
     System::Threading::{WaitForMultipleObjects, INFINITE},
     Storage::FileSystem::{CreatePipe, PIPE_NOWAIT, SetNamedPipeHandleState, ReadFile, WriteFile, SECURITY_ATTRIBUTES},
     System::Pipes::PIPE_ACCESS_DUPLEX,
@@ -103,9 +104,19 @@ impl PtyImpl {
         let master_clone = master.clone();
         let killer = pty.killer.clone();
 
+        // Set PTY reader to non-blocking
+        let mode: u32 = PIPE_NOWAIT;
+        unsafe {
+            if SetNamedPipeHandleState(rdr.as_raw_handle() as HANDLE, Some(&mode), std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
+                debug("Failed to set PTY pipe to non-blocking");
+                let _ = tx.send(Msg::End);
+                return;
+            }
+        }
+
         thread::spawn(move || {
             debug("read-thread started");
-            let mut buf = vec![0; 65536];
+            let mut buf = vec![0; 131072]; // Increased for better draining
             let mut control_buf: Vec<u8> = Vec::with_capacity(8192);
 
             // Get PTY handle
@@ -126,26 +137,35 @@ impl PtyImpl {
                 let res = unsafe { WaitForMultipleObjects(handles.as_ptr(), handles.len() as u32, INFINITE, 0) };
 
                 if res == 0xFFFFFFFF { // WAIT_FAILED
-                    debug("WaitForMultipleObjects failed");
+                    let err = unsafe { GetLastError() };
+                    debug(&format!("WaitForMultipleObjects failed with error: {}", err));
                     break;
                 }
 
                 if res == WAIT_OBJECT_0 {
-                    // PTY ready: Read data
-                    match rdr.read(&mut buf) {
-                        Ok(0) => {
-                            debug("read-thread: got Ok(0) - EOF");
-                            let _ = tx.send(Msg::End);
-                            return;
-                        }
-                        Ok(n) => {
-                            debug(&format!("read-thread: got Ok({}) bytes", n));
-                            let _ = tx.send(Msg::Data(buf[..n].to_vec()));
-                        }
-                        Err(e) => {
-                            debug(&format!("read-thread: read error: {}", e));
-                            let _ = tx.send(Msg::End);
-                            return;
+                    // PTY ready: Drain all data non-blockingly
+                    loop {
+                        match rdr.read(&mut buf) {
+                            Ok(0) => {
+                                debug("read-thread: got Ok(0) - EOF");
+                                let _ = tx.send(Msg::End);
+                                return;
+                            }
+                            Ok(n) => {
+                                debug(&format!("read-thread: got Ok({}) bytes", n));
+                                let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                            }
+                            Err(e) if e.raw_os_error() == Some(232) || e.kind() == ErrorKind::WouldBlock => {
+                                break;
+                            }
+                            Err(e) if e.kind() == ErrorKind::Interrupted => {
+                                continue;
+                            }
+                            Err(e) => {
+                                debug(&format!("read-thread: read error: {}", e));
+                                let _ = tx.send(Msg::End);
+                                return;
+                            }
                         }
                     }
                 } else if res == WAIT_OBJECT_0 + 1 {
@@ -174,7 +194,7 @@ impl PtyImpl {
             let res = unsafe { ReadFile(handle as HANDLE, temp.as_mut_ptr() as *mut std::ffi::c_void, temp.len() as u32, &mut bytes_read, std::ptr::null_mut()) };
             if res == 0 {
                 let err = Error::last_os_error();
-                if err.raw_os_error() == Some(997) { // ERROR_IO_PENDING
+                if err.raw_os_error() == Some(232) { // ERROR_NO_DATA for non-blocking pipes
                     break;
                 }
                 return Err(err);
