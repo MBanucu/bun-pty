@@ -302,9 +302,13 @@ For a reproducible development environment with cross-compilation support:
 # Enter the default development shell
 nix develop
 
-# Or for Windows cross-compilation (requires zigbuild)
-nix develop .#crossWindows
-cargo zigbuild --release --target x86_64-pc-windows-gnu
+# For Windows cross-compilation
+nix develop ./windows
+
+# Build the cross-compiled Windows library
+nix build ./windows
+
+# The output will be in ./windows/result/lib/rust_pty.dll
 ```
 
 ## ❓ Troubleshooting

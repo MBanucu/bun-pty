@@ -14,7 +14,6 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        crossPkgs = nixpkgs.legacyPackages.${system}.pkgsCross.mingwW64;
       in
       {
         devShells.default = pkgs.mkShell {
@@ -23,14 +22,6 @@
             rustc
             rustup  # Added for managing Rust targets
             zig  # For zigbuild cross-compilation
-            bun
-            bashInteractive
-          ];
-        };
-
-        devShells.crossWindows = crossPkgs.mkShell {
-          buildInputs = with crossPkgs; [
-            rustup
             bun
             bashInteractive
           ];
