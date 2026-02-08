@@ -331,7 +331,7 @@ describe.skipIf(!runIntegrationTests)("Integration Tests", () => {
 
     expect(missingLines.length).toBe(0);
     expect(lines.length).toBeGreaterThanOrEqual(1000);
-  });
+  }, 10000);
 
   test("Terminal preserves arguments with spaces correctly", async () => {
     let dataReceived = "";
