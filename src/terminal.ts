@@ -238,6 +238,18 @@ export class Terminal implements IPty {
 
 		while (this._readLoop && !this._closing) {
 			debug('read loop iteration');
+			const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
+			debug(`bun_pty_read returned n=${n}`);
+			if (n > 0) {
+				// Use streaming mode to buffer incomplete UTF-8 sequences across chunks
+				// This prevents corruption when multi-byte chars span chunk boundaries
+				const decoded = this._decoder.decode(buf.subarray(0, n), { stream: true });
+				if (decoded) {
+					this._onData.fire(decoded);
+				}
+			}
+
+			// Now check for exit (after handling any data)
 			const currentExitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
 			debug(`checked exit code: ${currentExitCode}`);
 			if (currentExitCode !== -1 && !this._exited) {
@@ -250,22 +262,19 @@ export class Terminal implements IPty {
 				this._onExit.fire({ exitCode: currentExitCode });
 				break;
 			}
-			const n = lib.symbols.bun_pty_read(this.handle, ptr(buf), buf.length);
-			debug(`bun_pty_read returned n=${n}`);
-			if (n > 0) {
-				// Use streaming mode to buffer incomplete UTF-8 sequences across chunks
-				// This prevents corruption when multi-byte chars span chunk boundaries
-				const decoded = this._decoder.decode(buf.subarray(0, n), { stream: true });
-				if (decoded) {
-					this._onData.fire(decoded);
+
+			if (n === -2) {
+				// CHILD_EXITED - poll exit code until available
+				let exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
+				while (exitCode === -1) {
+					await new Promise(r => setTimeout(r, 1));
+					exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
 				}
-			} else if (n === -2) {
-				// CHILD_EXITED - flush any remaining bytes in the decoder
+				// Flush any remaining bytes in the decoder
 				const remaining = this._decoder.decode();
 				if (remaining) {
 					this._onData.fire(remaining);
 				}
-				const exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
 				this._onExit.fire({ exitCode });
 				break;
 			} else if (n < 0) {
