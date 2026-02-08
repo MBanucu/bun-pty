@@ -16,7 +16,6 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
 };
 
 /* ---------- constants ---------- */
@@ -124,22 +123,25 @@ impl Reader {
         if self.done.load(Ordering::Relaxed) {
             return Ok(Msg::End);
         }
-        let mut msgs: Vec<_> = self.rx.try_iter().collect();
-        if msgs.iter().any(|m| matches!(m, Msg::End)) {
+        let msgs: Vec<_> = self.rx.try_iter().collect();
+        let has_end = msgs.iter().any(|m| matches!(m, Msg::End));
+        if has_end {
             self.done.store(true, Ordering::Relaxed);
-            thread::sleep(Duration::from_millis(20));
-            msgs.extend(self.rx.try_iter());
-            msgs.retain(|m| !matches!(m, Msg::End));
-            if msgs.is_empty() { return Ok(Msg::End); }
         }
-        if msgs.is_empty() {
-            return Ok(Msg::Data(Vec::new()));
+        let data_msgs: Vec<_> = msgs.into_iter().filter(|m| matches!(m, Msg::Data(_))).collect();
+        if data_msgs.is_empty() {
+            if has_end {
+                Ok(Msg::End)
+            } else {
+                Ok(Msg::Data(Vec::new()))
+            }
+        } else {
+            let mut out = Vec::new();
+            for m in data_msgs {
+                if let Msg::Data(d) = m { out.extend(d); }
+            }
+            Ok(Msg::Data(out))
         }
-        let mut out = Vec::new();
-        for m in msgs {
-            if let Msg::Data(d) = m { out.extend(d); }
-        }
-        Ok(Msg::Data(out))
     }
 }
 
@@ -188,7 +190,6 @@ impl Pty {
 
         /* wait-thread */
         {
-            let tx = tx_r.clone();
             let pty_clone = pty.clone();
             thread::spawn(move || {
                 let status = child.wait();
@@ -197,7 +198,7 @@ impl Pty {
                     debug(&format!("exit_status.exit_code(): {}", code));
                     pty_clone.exit_code.store(code, Ordering::Relaxed);
                 }
-                let _ = tx.send(Msg::End);
+                pty_clone.exited.store(true, Ordering::Relaxed);
             });
         }
 
