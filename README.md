@@ -191,6 +191,11 @@ bun-pty implements an advanced **Option A** architecture that provides true even
 - **Blocking FFI**: `bun_pty_wait()` function that blocks until data or control events arrive
 - **Poll-Based Read Thread**: Uses OS-level `poll()`/`select()` on both PTY file descriptor and control pipe
 
+#### Platform-Specific Optimizations
+
+- **Linux**: Uses `poll()` for event-driven I/O, with termination signaled exclusively by PTY EOF (eliminating race conditions that could cause data loss in quick-exiting processes)
+- **macOS/Windows**: Blocking reads with EOF detection for simple, reliable termination
+
 #### Thread Architecture
 
 ```
