@@ -72,10 +72,20 @@ impl PtyImpl {
                 if let Ok(exit_status) = status {
                     let code = exit_status.exit_code() as i32;
                     debug(&format!("exit_status.exit_code(): {}", code));
-                    pty_clone.exit_code.store(code, Ordering::Relaxed);
+                    pty_clone.exit_code.store(code, Ordering::Release);
                 }
-                pty_clone.exited.store(true, Ordering::Relaxed);
+                pty_clone.exited.store(true, Ordering::Release);
                 debug("wait-thread: exited and code stored");
+
+                // NEW: Wake read-thread via control pipe "exit" message
+                let msg_type = 4u8;  // New type: 4 = child exited (no payload)
+                let write_fd = pty_clone.control_pipe[1];
+                unsafe {
+                    let n = libc::write(write_fd, &msg_type as *const u8 as *const libc::c_void, 1);
+                    if n < 0 {
+                        debug("Failed to wake read-thread on exit");
+                    }
+                }
             });
         }
 
@@ -115,7 +125,7 @@ impl PtyImpl {
                 let mut pollfds = [
                     libc::pollfd {
                         fd: pty_fd,
-                        events: libc::POLLIN,
+                        events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
                         revents: 0,
                     },
                     libc::pollfd {
@@ -212,6 +222,11 @@ impl PtyImpl {
                                     // Drain remaining control_buf if needed, but break
                                     break;
                                 }
+                                4 => {  // NEW: Child exited
+                                    // No payload
+                                    let _ = tx.send(Msg::End);
+                                    break;  // Exit loop
+                                }
                                 _ => {
                                     debug(&format!("read-thread: unknown message type: {}", msg_type));
                                     // Skip or error?
@@ -225,14 +240,15 @@ impl PtyImpl {
                         }
                     }
 
-                    // Handle PTY data second
-                    if pollfds[0].revents & libc::POLLIN != 0 {
-                        debug("read-thread: PTY has data");
+                    // Handle PTY data or events (expanded condition)
+                    if pollfds[0].revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+                        debug("read-thread: PTY has data or event");
                         loop {
                             match rdr.read(&mut buf) {
                                 Ok(0) => {
                                     debug("read-thread: got Ok(0) - EOF");
-                                    break;
+                                    let _ = tx.send(Msg::End);  // Explicitly send End on EOF
+                                    return;  // Exit thread entirely on EOF (no more polling)
                                 }
                                 Ok(n) => {
                                     debug(&format!("read-thread: got Ok({}) bytes", n));
@@ -242,15 +258,17 @@ impl PtyImpl {
                                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                                 Err(e) => {
                                     debug(&format!("read-thread: read error: {}", e));
-                                    break;
+                                    let _ = tx.send(Msg::End);  // Send End on fatal error
+                                    return;
                                 }
                             }
                         }
                     }
 
                     // Check for other events (errors, etc.)
-                    if pollfds[0].revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
-                        debug("read-thread: PTY error");
+                    if pollfds[0].revents & (libc::POLLERR | libc::POLLNVAL | libc::POLLHUP) != 0 {
+                        debug("read-thread: PTY error or hangup");
+                        let _ = tx.send(Msg::End);
                         break;
                     }
                     if pollfds[1].revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
@@ -378,10 +396,10 @@ impl PtyTrait for PtyImpl {
     }
 
     fn get_exit_code(&self) -> i32 {
-        self.exit_code.load(Ordering::Relaxed)
+        self.exit_code.load(Ordering::Acquire)
     }
 
     fn is_exited(&self) -> bool {
-        self.exited.load(Ordering::Relaxed)
+        self.exited.load(Ordering::Acquire)
     }
 }

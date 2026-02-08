@@ -24,21 +24,16 @@ async function startReadLoop() {
 	running = true;
 
 	const buf = Buffer.allocUnsafe(4096);
-	const typeBuf = Buffer.alloc(4); // int32 for event type
 
 	while (running) {
-		const n = symbols.bun_pty_wait(handle, ptr(buf), buf.length, ptr(typeBuf));
+		const n = symbols.bun_pty_read(handle, ptr(buf), buf.length, 1); // blocking=1
 
-		const eventType = typeBuf.readInt32LE(0);
-
-		if (eventType === 0) { // DATA
-			if (n > 0) {
-				const decoded = decoder.decode(buf.subarray(0, n), { stream: true });
-				if (decoded) {
-					postMessage({ type: 'data', data: decoded });
-				}
+		if (n > 0) { // DATA
+			const decoded = decoder.decode(buf.subarray(0, n), { stream: true });
+			if (decoded) {
+				postMessage({ type: 'data', data: decoded });
 			}
-		} else if (eventType === 1) { // EXIT
+		} else if (n === -2) { // CHILD_EXITED
 			const remaining = decoder.decode();  // Flush decoder
 			if (remaining) {
 				postMessage({ type: 'data', data: remaining });
@@ -46,10 +41,11 @@ async function startReadLoop() {
 			const exitCode = symbols.bun_pty_get_exit_code(handle);
 			postMessage({ type: 'exit', exitCode });
 			break;
-		} else if (eventType === 2) { // CONTROL_EVENT
-			// Handle control events if needed
-			// For now, just continue
+		} else if (n < 0) {
+			// Other error, perhaps break
+			break;
 		}
+		// n === 0 means no data, continue loop
 	}
 
 	// Final cleanup on exit
