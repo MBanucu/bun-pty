@@ -1,4 +1,5 @@
 use super::helpers::*;
+use super::super::control::*;
 use crate::pty::{Msg, PtyTrait, Reader};
 use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
 use std::{

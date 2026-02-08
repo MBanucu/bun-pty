@@ -1,4 +1,4 @@
-use super::{helpers::*, pty_impl::PtyImpl};
+use super::{helpers::*, pty_impl::PtyImpl, super::control::*};
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
 use portable_pty::{ChildKiller, MasterPty};

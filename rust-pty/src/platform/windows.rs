@@ -1,11 +1,19 @@
 // Windows-specific implementation (shared with macOS, as portable-pty handles cross-platform)
-pub use super::common::*;
-}
-
-// Constants from linux/helpers.rs
-const MSG_WRITE: u8 = 1;
-const MSG_RESIZE: u8 = 2;
-const MSG_KILL: u8 = 3;
+use super::control::*;
+use crate::pty::{Msg, PtyTrait, Reader};
+use crossbeam::channel::unbounded;
+use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
+use std::{
+    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicI32, Ordering}},
+    thread,
+    os::windows::io::OwnedHandle,
+};
+use windows_sys::Win32::{
+    Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_FAILED, INVALID_HANDLE_VALUE},
+    System::Threading::{WaitForMultipleObjects, INFINITE},
+    Storage::FileSystem::{CreatePipe, PIPE_NOWAIT, SetNamedPipeHandleState, ReadFile, WriteFile, SECURITY_ATTRIBUTES},
+    System::Pipes::PIPE_ACCESS_DUPLEX,
+};
 
 pub struct PtyImpl {
     pub(crate) reader: crate::pty::Reader,
@@ -101,7 +109,7 @@ impl PtyImpl {
             let mut control_buf: Vec<u8> = Vec::with_capacity(8192);
 
             // Get PTY handle
-            let pty_handle = rdr.get_ref().as_raw_handle(); // Assuming BufReader<File> has as_raw_handle
+            let pty_handle = master_clone.lock().unwrap().as_raw_handle();
 
             // Take writer
             let mut writer = match master_clone.lock().unwrap().take_writer() {
@@ -142,10 +150,10 @@ impl PtyImpl {
                     }
                 } else if res == WAIT_OBJECT_0 + 1 {
                     // Control ready: Read messages
-                    if let Err(e) = Self::read_all_nonblocking_handle(control_handle, &mut control_buf) {
-                        debug(&format!("Control read error: {}", e));
+                    if Self::read_all_nonblocking_handle(control_handle, &mut control_buf).is_err() {
+                        debug(&format!("Control read error"));
                     }
-                    if Self::process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
+                    if process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
                         break; // Kill processed
                     }
                 }
@@ -178,77 +186,6 @@ impl PtyImpl {
             total += bytes_read as usize;
         }
         Ok(total)
-    }
-
-    fn process_control_messages(
-        control_buf: &mut Vec<u8>,
-        writer: &mut dyn std::io::Write,
-        master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
-        killer: &Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
-        tx: &Sender<Msg>,
-    ) -> bool {
-        let mut pos = 0;
-        while pos < control_buf.len() {
-            if control_buf.len() - pos < 1 {
-                break;
-            }
-            let msg_type = control_buf[pos];
-            pos += 1;
-
-            debug(&format!("Processing control message type: {}", msg_type));
-
-            match msg_type {
-                MSG_WRITE => {
-                    if control_buf.len() - pos < 4 {
-                        pos -= 1;
-                        break;
-                    }
-                    let data_len = u32::from_le_bytes([control_buf[pos], control_buf[pos+1], control_buf[pos+2], control_buf[pos+3]]) as usize;
-                    pos += 4;
-
-                    if control_buf.len() - pos < data_len {
-                        pos -= 5;
-                        break;
-                    }
-                    let data = &control_buf[pos..pos + data_len];
-                    if let Err(e) = writer.write_all(data) {
-                        debug(&format!("Write error: {}", e));
-                    } else if let Err(e) = writer.flush() {
-                        debug(&format!("Flush error: {}", e));
-                    }
-                    pos += data_len;
-                }
-                MSG_RESIZE => {
-                    if control_buf.len() - pos < 4 {
-                        pos -= 1;
-                        break;
-                    }
-                    let rows = u16::from_le_bytes([control_buf[pos], control_buf[pos+1]]);
-                    let cols = u16::from_le_bytes([control_buf[pos+2], control_buf[pos+3]]);
-                    pos += 4;
-                    if let Err(e) = master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
-                        debug(&format!("Resize error: {}", e));
-                    }
-                }
-                MSG_KILL => {
-                    if let Ok(mut k) = killer.lock() {
-                        let _ = k.kill();
-                    }
-                    let _ = tx.send(Msg::End);
-                    control_buf.drain(..);
-                    return true;
-                }
-                _ => {
-                    debug(&format!("Unknown message type: {}", msg_type));
-                }
-            }
-        }
-
-        if pos > 0 {
-            control_buf.drain(0..pos);
-        }
-
-        false
     }
 }
 
