@@ -1,4 +1,5 @@
-use super::{helpers::*, pty_impl::PtyImpl, super::control::*};
+use super::{helpers::{FdReader}, pty_impl::PtyImpl, super::control::*};
+use super::super::io_helpers::NonBlockingReader;
 use crate::pty::Msg;
 use crossbeam::channel::Sender;
 use portable_pty::{ChildKiller, MasterPty};
@@ -78,8 +79,9 @@ impl PtyImpl {
                 // Handle control events first
                 if pollfds[1].revents & POLLIN != 0 {
                     debug("read-thread: control pipe has data");
-                    if let Err(e) = read_all_nonblocking(control_read_fd, &mut control_buf) {
-                        debug(&format!("Control read error: {}", e));
+                    let mut control_reader = FdReader(control_read_fd);
+                    if control_reader.read_all_nonblocking(&mut control_buf).is_err() {
+                        debug(&format!("Control read error"));
                     }
                     if process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
                         break; // Kill processed
@@ -99,6 +101,9 @@ impl PtyImpl {
                             Ok(n) => {
                                 debug(&format!("read-thread: got Ok({}) bytes", n));
                                 let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                                if n == buf.len() {
+                                    buf.resize(buf.len() * 2, 0);
+                                }
                             }
                             Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                             Err(e) if e.kind() == ErrorKind::Interrupted => continue,

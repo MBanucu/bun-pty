@@ -1,5 +1,6 @@
-use super::helpers::*;
+use super::helpers::{FdWriter};
 use super::super::control::*;
+use super::super::io_helpers::NonBlockingWriter;
 use crate::pty::{Msg, PtyTrait, Reader};
 use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
 use std::{
@@ -79,18 +80,21 @@ impl PtyTrait for PtyImpl {
         let mut buf = vec![MSG_WRITE];
         buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
         buf.extend_from_slice(data);
-        write_all_nonblocking(self.control_pipe[1], &buf).map_err(Into::into)
+        let mut writer = FdWriter(self.control_pipe[1]);
+        writer.write_all_nonblocking(&buf).map_err(Into::into)
     }
 
     fn resize(&self, size: PtySize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut buf = vec![MSG_RESIZE];
         buf.extend_from_slice(&size.rows.to_le_bytes());
         buf.extend_from_slice(&size.cols.to_le_bytes());
-        write_all_nonblocking(self.control_pipe[1], &buf).map_err(Into::into)
+        let mut writer = FdWriter(self.control_pipe[1]);
+        writer.write_all_nonblocking(&buf).map_err(Into::into)
     }
 
     fn kill(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        write_all_nonblocking(self.control_pipe[1], &[MSG_KILL]).map_err(Into::into)
+        let mut writer = FdWriter(self.control_pipe[1]);
+        writer.write_all_nonblocking(&[MSG_KILL]).map_err(Into::into)
     }
 
     fn get_pid(&self) -> i32 {

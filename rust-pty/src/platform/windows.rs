@@ -1,5 +1,5 @@
 // Windows-specific implementation (shared with macOS, as portable-pty handles cross-platform)
-use super::control::*;
+use super::{control::*, io_helpers::{NonBlockingReader, NonBlockingWriter, PtyIoError}};
 use crate::pty::{Msg, PtyTrait, Reader};
 use crossbeam::channel::unbounded;
 use portable_pty::{native_pty_system, PtySize, ChildKiller, MasterPty};
@@ -12,11 +12,77 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_FAILED, INVALID_HANDLE_VALUE, GetLastError},
     System::Threading::{WaitForMultipleObjects, INFINITE},
-    Storage::FileSystem::{CreatePipe, PIPE_NOWAIT, SetNamedPipeHandleState, ReadFile, WriteFile, SECURITY_ATTRIBUTES},
+    Storage::FileSystem::{CreatePipe, PIPE_NOWAIT, SetNamedPipeHandleState, ReadFile, WriteFile, SECURITY_ATTRIBUTES, PeekNamedPipe},
     System::Pipes::PIPE_ACCESS_DUPLEX,
 };
 
-pub struct PtyImpl {
+// Windows-specific error codes
+const ERROR_NO_DATA: i32 = 232;
+const ERROR_BROKEN_PIPE: i32 = 109;
+const ERROR_IO_PENDING: i32 = 997;
+
+// Windows-specific error codes
+const ERROR_NO_DATA: i32 = 232;
+const ERROR_BROKEN_PIPE: i32 = 109;
+const ERROR_IO_PENDING: i32 = 997;
+
+/// Wrapper for Windows handles to implement NonBlockingReader
+pub struct HandleReader(pub HANDLE);
+
+impl NonBlockingReader for HandleReader {
+    fn read_all_nonblocking(&mut self, buf: &mut Vec<u8>) -> Result<usize, PtyIoError> {
+        use std::io::Error;
+        let mut temp = [0u8; 131072]; // Larger buffer for Windows
+        let mut total = 0;
+        loop {
+            let mut bytes_read = 0u32;
+            let res = unsafe { ReadFile(self.0, temp.as_mut_ptr() as *mut std::ffi::c_void, temp.len() as u32, &mut bytes_read, std::ptr::null_mut()) };
+            if res == 0 {
+                let err = Error::last_os_error();
+                let raw_err = err.raw_os_error().unwrap_or(0);
+                if raw_err == ERROR_NO_DATA {
+                    break;
+                } else if raw_err == ERROR_IO_PENDING {
+                    continue; // For async, but here non-blocking
+                }
+                return Err(PtyIoError::from(err));
+            }
+            if bytes_read == 0 {
+                break;
+            }
+            buf.extend_from_slice(&temp[0..bytes_read as usize]);
+            total += bytes_read as usize;
+        }
+        Ok(total)
+    }
+}
+
+/// Wrapper for Windows handles to implement NonBlockingWriter
+pub struct HandleWriter(pub HANDLE);
+
+impl NonBlockingWriter for HandleWriter {
+    fn write_all_nonblocking(&mut self, data: &[u8]) -> Result<(), PtyIoError> {
+        use std::io::Error;
+        let mut pos = 0;
+        while pos < data.len() {
+            let mut bytes_written = 0u32;
+            let res = unsafe { WriteFile(self.0, data[pos..].as_ptr() as *const std::ffi::c_void, (data.len() - pos) as u32, &mut bytes_written, std::ptr::null_mut()) };
+            if res == 0 {
+                let err = Error::last_os_error();
+                let raw_err = err.raw_os_error().unwrap_or(0);
+                if raw_err == ERROR_IO_PENDING {
+                    continue;
+                }
+                return Err(PtyIoError::from(err));
+            }
+            if bytes_written == 0 {
+                return Err(PtyIoError::BrokenPipe);
+            }
+            pos += bytes_written as usize;
+        }
+        Ok(())
+    }
+}
     pub(crate) reader: crate::pty::Reader,
     pub(crate) master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub(crate) killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
@@ -142,6 +208,9 @@ impl PtyImpl {
                     break;
                 }
 
+                let mut handled_pty = false;
+                let mut handled_control = false;
+
                 if res == WAIT_OBJECT_0 {
                     // PTY ready: Drain all data non-blockingly
                     loop {
@@ -154,8 +223,11 @@ impl PtyImpl {
                             Ok(n) => {
                                 debug(&format!("read-thread: got Ok({}) bytes", n));
                                 let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                                if n == buf.len() {
+                                    buf.resize(buf.len() * 2, 0);
+                                }
                             }
-                            Err(e) if e.raw_os_error() == Some(232) || e.kind() == ErrorKind::WouldBlock => {
+                            Err(e) if e.raw_os_error() == Some(ERROR_NO_DATA) || e.kind() == ErrorKind::WouldBlock => {
                                 break;
                             }
                             Err(e) if e.kind() == ErrorKind::Interrupted => {
@@ -168,13 +240,59 @@ impl PtyImpl {
                             }
                         }
                     }
+                    handled_pty = true;
                 } else if res == WAIT_OBJECT_0 + 1 {
                     // Control ready: Read messages
-                    if Self::read_all_nonblocking_handle(control_handle, &mut control_buf).is_err() {
+                    let mut control_reader = HandleReader(control_handle as HANDLE);
+                    if control_reader.read_all_nonblocking(&mut control_buf).is_err() {
                         debug(&format!("Control read error"));
                     }
                     if process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
                         break; // Kill processed
+                    }
+                    handled_control = true;
+                }
+
+                // Check the other handle without waiting
+                let other_handle = if handled_pty { control_handle as HANDLE } else { pty_handle as HANDLE };
+                let mut bytes_available: u32 = 0;
+                let peek_res = unsafe { PeekNamedPipe(other_handle, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut bytes_available, std::ptr::null_mut()) };
+                if peek_res != 0 && bytes_available > 0 {
+                    if handled_pty {
+                        // Handle control now
+                        let mut control_reader = HandleReader(control_handle as HANDLE);
+                        if control_reader.read_all_nonblocking(&mut control_buf).is_err() {
+                            debug(&format!("Control read error"));
+                        }
+                        if process_control_messages(&mut control_buf, &mut writer, &master_clone, &killer, &tx) {
+                            break;
+                        }
+                    } else {
+                        // Handle PTY now
+                        loop {
+                            match rdr.read(&mut buf) {
+                                Ok(0) => {
+                                    debug("read-thread: got Ok(0) - EOF");
+                                    let _ = tx.send(Msg::End);
+                                    return;
+                                }
+                                Ok(n) => {
+                                    debug(&format!("read-thread: got Ok({}) bytes", n));
+                                    let _ = tx.send(Msg::Data(buf[..n].to_vec()));
+                                }
+                                Err(e) if e.raw_os_error() == Some(ERROR_NO_DATA) || e.kind() == ErrorKind::WouldBlock => {
+                                    break;
+                                }
+                                Err(e) if e.kind() == ErrorKind::Interrupted => {
+                                    continue;
+                                }
+                                Err(e) => {
+                                    debug(&format!("read-thread: read error: {}", e));
+                                    let _ = tx.send(Msg::End);
+                                    return;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -184,29 +302,7 @@ impl PtyImpl {
         });
     }
 
-    fn read_all_nonblocking_handle(handle: *mut std::ffi::c_void, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        use windows_sys::Win32::Storage::FileSystem::ReadFile;
-        use std::io::Error;
-        let mut temp = [0u8; 8192];
-        let mut total = 0;
-        loop {
-            let mut bytes_read = 0u32;
-            let res = unsafe { ReadFile(handle as HANDLE, temp.as_mut_ptr() as *mut std::ffi::c_void, temp.len() as u32, &mut bytes_read, std::ptr::null_mut()) };
-            if res == 0 {
-                let err = Error::last_os_error();
-                if err.raw_os_error() == Some(232) { // ERROR_NO_DATA for non-blocking pipes
-                    break;
-                }
-                return Err(err);
-            }
-            if bytes_read == 0 {
-                break;
-            }
-            buf.extend_from_slice(&temp[0..bytes_read as usize]);
-            total += bytes_read as usize;
-        }
-        Ok(total)
-    }
+
 }
 
 impl crate::pty::PtyTrait for PtyImpl {
@@ -219,19 +315,22 @@ impl crate::pty::PtyTrait for PtyImpl {
         let mut msg = vec![MSG_WRITE];
         msg.extend_from_slice(&(data.len() as u32).to_le_bytes());
         msg.extend_from_slice(data);
-        Self::write_all_nonblocking_handle(self.control_pipe_write.as_raw_handle(), &msg)
+        let mut writer = HandleWriter(self.control_pipe_write.as_raw_handle() as HANDLE);
+        writer.write_all_nonblocking(&msg).map_err(|e| e.into())
     }
 
     fn resize(&self, size: PtySize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut msg = vec![MSG_RESIZE];
         msg.extend_from_slice(&size.rows.to_le_bytes());
         msg.extend_from_slice(&size.cols.to_le_bytes());
-        Self::write_all_nonblocking_handle(self.control_pipe_write.as_raw_handle(), &msg)
+        let mut writer = HandleWriter(self.control_pipe_write.as_raw_handle() as HANDLE);
+        writer.write_all_nonblocking(&msg).map_err(|e| e.into())
     }
 
     fn kill(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let msg = vec![MSG_KILL];
-        Self::write_all_nonblocking_handle(self.control_pipe_write.as_raw_handle(), &msg)?;
+        let mut writer = HandleWriter(self.control_pipe_write.as_raw_handle() as HANDLE);
+        writer.write_all_nonblocking(&msg)?;
         Ok(())
     }
 
@@ -249,25 +348,4 @@ impl crate::pty::PtyTrait for PtyImpl {
 }
 
 impl PtyImpl {
-    fn write_all_nonblocking_handle(handle: *mut std::ffi::c_void, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        use windows_sys::Win32::Storage::FileSystem::WriteFile;
-        use std::io::Error;
-        let mut pos = 0;
-        while pos < data.len() {
-            let mut bytes_written = 0u32;
-            let res = unsafe { WriteFile(handle as HANDLE, data[pos..].as_ptr() as *const std::ffi::c_void, (data.len() - pos) as u32, &mut bytes_written, std::ptr::null_mut()) };
-            if res == 0 {
-                let err = Error::last_os_error();
-                if err.raw_os_error() == Some(997) { // ERROR_IO_PENDING
-                    continue;
-                }
-                return Err(err.into());
-            }
-            if bytes_written == 0 {
-                return Err("Pipe closed".into());
-            }
-            pos += bytes_written as usize;
-        }
-        Ok(())
-    }
 }
